@@ -214,23 +214,23 @@ export class AuditEngine {
         case 'No Online Booking':
           opportunities.push({
             type: 'AI_BOOKING_ASSISTANT',
-            title: 'Automated Appointment Booking',
-            evidence: 'No online booking system detected. NextCall can capture calls and schedule appointments automatically 24/7.'
+            title: 'Appointment Scheduling',
+            evidence: 'No online booking system was detected. NEXT CALL can help move callers from inquiry toward a scheduled appointment during phone conversations.'
           });
           break;
         case 'Limited Contact Options':
           opportunities.push({
             type: 'AI_LEAD_CAPTURE',
-            title: '24/7 Lead Capture',
-            evidence: 'Limited digital contact options detected. NextCall ensures every call is answered, capturing leads even after hours.'
+            title: 'Lead Capture',
+            evidence: 'Limited digital contact options were detected. NEXT CALL is designed to answer inbound calls and capture caller information when the team is unavailable.'
           });
           break;
         case 'Unreachable Website':
         case 'No Website Found':
           opportunities.push({
             type: 'AI_MISSED_CALL_RECOVERY',
-            title: 'Primary Phone Reliance',
-            evidence: 'Business lacks a strong web presence, making phone calls the primary lead source. NextCall ensures these calls are never missed.'
+            title: 'Missed Call Recovery',
+            evidence: 'With limited digital contact options detected, phone communication appears to be an important customer contact path. NEXT CALL can help answer inbound calls and reconnect with callers who reach out when the team is unavailable.'
           });
           break;
         default:

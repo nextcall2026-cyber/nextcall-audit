@@ -4,7 +4,8 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { persistenceService } from "@/services/persistenceService";
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { AuditReportDocument } from "@/components/reports/AuditReportDocument";
-import { ReportViewModel, ReportCategoryScore, AuditCategoryName, Business, AuditResult, AuditReport } from "@/types";
+import { buildReportViewModel } from "@/services/reportViewModel";
+import { auditConsistencyIssues } from "@/components/reports/pdf/builders";
 import { logger } from "@/lib/logger";
 import { ValidationError } from "@/lib/errors";
 
@@ -30,7 +31,16 @@ export class ReportService {
         }
 
         // 4. Assemble the Report View Model
-        const vm = this.buildViewModel(business, storedAudit.audit, storedAudit.aiReport);
+        const vm = buildReportViewModel(business, storedAudit.audit, storedAudit.aiReport);
+
+        // 4b. Validation layer: never render a report whose narrative signals
+        // contradict the audit result (Issue 17). Log so data bugs surface.
+        const issues = auditConsistencyIssues(vm);
+        if (issues.length > 0) {
+            for (const issue of issues) {
+                logger.warn(`[ReportService] Consistency guard (${issue.section}): ${issue.message}`);
+            }
+        }
 
         // 5. Render PDF to Buffer
         try {
@@ -43,57 +53,6 @@ export class ReportService {
             logger.error(`[ReportService] Failed to render PDF: ${error.message}`);
             throw new Error("Failed to generate PDF document.");
         }
-    }
-
-    private buildViewModel(business: Business, audit: AuditResult, aiReport: AuditReport): ReportViewModel {
-        // Format location string safely
-        const locationParts = [
-            business.location?.city,
-            business.location?.state,
-            business.location?.country
-        ].filter(Boolean);
-        const locationStr = locationParts.join(", ");
-
-        // Map category scores to the VM format
-        const categoryScores: ReportCategoryScore[] = Object.entries(audit.categoryScores).map(([name, data]) => ({
-            name: name.charAt(0) + name.slice(1).toLowerCase(), // Format "WEBSITE" -> "Website"
-            score: data.score
-        }));
-
-        // Group findings by category for the narrative sections
-        const categoryDetails = categoryScores.map((c) => ({
-            key: c.name.toUpperCase() as AuditCategoryName,
-            name: c.name,
-            score: c.score,
-            findings: audit.findings.filter((f) => f.category === c.name.toUpperCase())
-        }));
-
-        const enrichment = business.enrichment;
-        const phones = enrichment?.phones ?? [];
-        const websiteData = enrichment?.website;
-
-        return {
-            businessName: business.name || "Unknown Business",
-            category: business.categories?.[0] || "General",
-            location: locationStr || "Unknown Location",
-            auditDate: audit.calculatedAt,
-            auditVersion: audit.auditVersion,
-            overallScore: audit.overallScore,
-            confidence: audit.confidence,
-            categoryScores,
-            categoryDetails,
-            signals: {
-                phone: phones[0]?.normalized ?? null,
-                website: websiteData?.url ?? business.website ?? null,
-                preferredEmail: enrichment?.preferredEmail ?? null,
-                rating: business.rating ?? null,
-                reviewCount: business.reviewCount ?? null,
-                bookingDetected: enrichment?.booking?.detected ?? false,
-                bookingSystem: enrichment?.booking?.systemName ?? null
-            },
-            aiReport,
-            nextCallOpportunities: audit.opportunities
-        };
     }
 }
 

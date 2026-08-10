@@ -47,7 +47,6 @@ const styles = StyleSheet.create({
     color: palette.ink,
     marginTop: spacing.lg,
     marginBottom: spacing.sm,
-    minPresenceAhead: 90,
   },
   sectionRule: {
     height: 0,
@@ -130,10 +129,16 @@ export function statusColors(status: string): { bg: string; fg: string } {
 // Primitives
 // ---------------------------------------------------------------------------
 
-export function SectionTitle({ children }: { children: React.ReactNode }) {
+export function SectionTitle({
+  children,
+  minPresenceAhead = 90,
+}: {
+  children: React.ReactNode;
+  minPresenceAhead?: number;
+}) {
   return (
     <View>
-      <Text style={styles.sectionTitle}>{children}</Text>
+      <Text style={styles.sectionTitle} minPresenceAhead={minPresenceAhead}>{children}</Text>
       <View style={styles.sectionRule} />
     </View>
   );
@@ -159,12 +164,25 @@ export function SmallText({
   return <Text style={[styles.small, ...(style ? [style] : [])]}>{children}</Text>;
 }
 
-export function Label({ children, style }: { children: React.ReactNode; style?: Style }) {
-  return <Text style={[styles.label, ...(style ? [style] : [])]}>{children}</Text>;
+export function Label({
+  children,
+  style,
+  minPresenceAhead,
+}: {
+  children: React.ReactNode;
+  style?: Style;
+  minPresenceAhead?: number;
+}) {
+  return (
+    <Text style={[styles.label, ...(style ? [style] : [])]} {...(minPresenceAhead !== undefined ? { minPresenceAhead } : {})}>
+      {children}
+    </Text>
+  );
 }
 
 export function Card({ children, surface }: { children: React.ReactNode; surface?: boolean }) {
-  return <View style={surface ? styles.surfaceCard : styles.card}>{children}</View>;
+  // wrap={false}: a card must never split across a page boundary.
+  return <View style={surface ? styles.surfaceCard : styles.card} wrap={false}>{children}</View>;
 }
 
 export function StatusBadge({

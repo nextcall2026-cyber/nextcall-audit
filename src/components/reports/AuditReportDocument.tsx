@@ -3,11 +3,13 @@
  *
  * Premium, personalized, information-first report document.
  *
- * Architecture: five narrative pages composed from reusable sections.
+ * Architecture: six narrative pages composed from reusable sections.
  * All content is derived dynamically from the audit ReportViewModel —
- * no business data is hardcoded. Pages flow naturally to additional
- * pages when content is longer; the fixed footer always numbers
- * correctly ("01 / 05" style).
+ * no business data is hardcoded. Page composition is explicit so each
+ * section keeps page-internal integrity: keep-together blocks
+ * (wrap={false}) and never-open-page breaks guarantee that no section
+ * strands alone on a page and priorities/roadmaps are never split.
+ * The fixed footer always numbers correctly ("01 / 06" style).
  */
 
 import React from "react";
@@ -45,7 +47,7 @@ export const AuditReportDocument = ({ vm }: AuditReportDocumentProps) => {
         <CoverSection vm={vm} statement={statement} />
       </ReportPage>
 
-      {/* PAGE 2 — What we found */}
+      {/* PAGE 2 — What we found + strengths + priority opportunities */}
       <ReportPage businessName={vm.businessName} breakNow>
         <ExecutiveSummarySection vm={vm} />
       </ReportPage>
@@ -60,9 +62,13 @@ export const AuditReportDocument = ({ vm }: AuditReportDocumentProps) => {
         <JourneySection vm={vm} />
       </ReportPage>
 
-      {/* PAGE 5 — NEXT CALL solution + prioritized roadmap */}
+      {/* PAGE 5 — One opportunity worth addressing (NEXT CALL) */}
       <ReportPage businessName={vm.businessName} breakNow>
         <NextCallSection vm={vm} />
+      </ReportPage>
+
+      {/* PAGE 6 — Prioritized roadmap + CTA + methodology */}
+      <ReportPage businessName={vm.businessName} breakNow>
         <RoadmapSection vm={vm} />
         <NextCallCtaSection vm={vm} />
         <MethodologySection vm={vm} />

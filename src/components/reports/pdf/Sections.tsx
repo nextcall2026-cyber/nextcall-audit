@@ -171,6 +171,13 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
     gap: spacing.sm,
   },
+  strengthMark: {
+    width: 8,
+    height: 8,
+    borderRadius: 2,
+    backgroundColor: palette.green,
+    marginTop: 6,
+  },
   roadmapRow: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -311,11 +318,25 @@ export function ExecutiveSummarySection({ vm }: { vm: ReportViewModel }) {
       <BodyText>{buildOverviewStatement(vm)}</BodyText>
       <BodyText style={{ marginTop: spacing.sm }}>{vm.aiReport.executiveSummary}</BodyText>
 
+      {strengths.length > 0 && (
+        <View style={{ marginTop: spacing.lg }} wrap={false}>
+          <SectionTitle>What You&apos;re Doing Well</SectionTitle>
+          {strengths.map((s, i) => (
+            <View key={i} style={styles.strengthRow}>
+              <View style={styles.strengthMark} />
+              <Text style={[styles.strengthRow, { flex: 1, marginBottom: spacing.xs }]}>
+                <SmallText>{s}</SmallText>
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
       {findings.length > 0 && (
-        <View style={{ marginTop: spacing.lg }}>
+        <View style={{ marginTop: spacing.lg }} wrap={false}>
           <SectionTitle>Priority Opportunities</SectionTitle>
           {findings.map((f, i) => (
-            <Card key={i}>
+<Card key={i}>
               <View style={styles.findingHeader}>
                 <Text style={{ fontFamily: font.bold, fontSize: type.cardTitle, color: palette.ink }}>
                   {f.category}
@@ -337,20 +358,6 @@ export function ExecutiveSummarySection({ vm }: { vm: ReportViewModel }) {
                 {f.opportunity}
               </InfoLine>
             </Card>
-          ))}
-        </View>
-      )}
-
-      {strengths.length > 0 && (
-        <View style={{ marginTop: spacing.lg }}>
-          <SectionTitle>What You're Doing Well</SectionTitle>
-          {strengths.map((s, i) => (
-            <View key={i} style={styles.strengthRow}>
-              <Text style={{ color: palette.green, fontFamily: font.bold, fontSize: type.body }}>✓</Text>
-              <Text style={[styles.strengthRow, { flex: 1, marginBottom: spacing.xs }]}>
-                <SmallText>{s}</SmallText>
-              </Text>
-            </View>
           ))}
         </View>
       )}
@@ -493,12 +500,17 @@ export function NextCallSection({ vm }: { vm: ReportViewModel }) {
 
       <Card>
         <Label style={{ color: palette.purple, marginBottom: spacing.xs }}>
-          Problem · {primary.problem}
+          Finding &amp; Impact
         </Label>
+        <Text style={{ fontFamily: font.bold, fontSize: type.cardTitle, color: palette.ink, marginBottom: spacing.xs }}>
+          {primary.problem}
+        </Text>
         <BodyText>{primary.whyItMatters}</BodyText>
       </Card>
 
-      <Label style={{ marginTop: spacing.lg, marginBottom: spacing.sm }}>How NEXT CALL Can Help</Label>
+      <Label style={{ marginTop: spacing.lg, marginBottom: spacing.sm }} minPresenceAhead={140}>
+        How NEXT CALL Can Help
+      </Label>
       {capabilities.map((c, i) => (
         <Card key={i} surface>
           <InfoLine label="Capability" accent>
@@ -524,7 +536,7 @@ export function RoadmapSection({ vm }: { vm: ReportViewModel }) {
   const roadmap = buildRoadmap(vm);
 
   return (
-    <View style={{ marginTop: spacing.lg }}>
+    <View style={{ marginTop: spacing.lg }} wrap={false}>
       <SectionTitle>Recommended Priorities</SectionTitle>
       {roadmap.map((item, i) => (
         <View key={i} style={styles.roadmapRow}>
@@ -568,7 +580,7 @@ export function MethodologySection({ vm }: { vm: ReportViewModel }) {
   });
 
   return (
-    <View style={styles.methodologyBox}>
+    <View style={styles.methodologyBox} wrap={false}>
       <Label style={{ marginBottom: spacing.xs }}>About This Assessment</Label>
       <Text style={{ fontFamily: font.family, fontSize: type.small, lineHeight: 1.5, color: palette.muted }}>
         This assessment was generated using publicly available business information, provider data,
