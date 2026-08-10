@@ -1,0 +1,80 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { LogoutButton } from "@/components/dashboard/LogoutButton";
+import { cn } from "@/lib/utils";
+import { LayoutDashboard, Compass, Kanban, Settings } from "lucide-react";
+
+const navItems = [
+    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/dashboard/discovery", label: "Business Discovery", icon: Compass },
+    { href: "/dashboard/pipeline", label: "Pipeline", icon: Kanban },
+    { href: "/dashboard/settings", label: "Settings", icon: Settings },
+];
+
+function SidebarNav() {
+    const pathname = usePathname() ?? "";
+
+    return (
+        <nav className="flex flex-col gap-4 p-4">
+            <Link href="/dashboard" className="mb-4 flex items-center gap-2 text-lg font-semibold tracking-tight text-foreground">
+                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground text-xs font-bold">NC</span>
+                NextCall Prospector
+            </Link>
+            <div className="flex flex-col gap-0.5">
+                {navItems.map((item) => {
+                    const isActive = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
+                    const Icon = item.icon;
+                    return (
+                        <Link
+                            key={item.href}
+                            href={item.href}
+                            aria-current={isActive ? "page" : undefined}
+                            className={cn(
+                                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                                isActive
+                                    ? "bg-primary/10 text-primary"
+                                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                            )}
+                        >
+                            <Icon className="h-4 w-4 shrink-0" />
+                            {item.label}
+                        </Link>
+                    );
+                })}
+            </div>
+        </nav>
+    );
+}
+
+export default function DashboardLayout({
+    children,
+}: {
+    children: React.ReactNode;
+}) {
+    const pathname = usePathname() ?? "";
+
+    const pageTitle = navItems.find((item) =>
+        item.href === "/dashboard"
+            ? pathname === "/dashboard"
+            : pathname.startsWith(item.href)
+    )?.label || "Dashboard";
+
+    return (
+        <div className="flex min-h-screen w-full flex-col bg-muted/40">
+            <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-col border-r bg-sidebar sm:flex">
+                <SidebarNav />
+            </aside>
+            <div className="flex flex-col sm:pl-64">
+                <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b bg-background px-6">
+                    <h1 className="text-base font-semibold text-foreground">{pageTitle}</h1>
+                    <LogoutButton />
+                </header>
+                <main className="flex flex-1 flex-col gap-4 p-6">
+                    {children}
+                </main>
+            </div>
+        </div>
+    );
+}

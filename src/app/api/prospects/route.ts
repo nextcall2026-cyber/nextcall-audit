@@ -1,0 +1,131 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { persistenceService } from "@/services/persistenceService";
+import { prospectPersistenceService } from "@/services/prospectPersistenceService";
+import { auditPersistenceService } from "@/services/auditPersistenceService";
+import { opportunityService } from "@/services/opportunityService";
+import { PipelineStatus } from "@/types";
+import { logger } from "@/lib/logger";
+
+const CreateProspectSchema = z.object({
+  businessId: z.string().min(1),
+});
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+
+    const parsed = CreateProspectSchema.safeParse(body);
+
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          error: "Invalid request",
+          details: parsed.error.issues,
+        },
+        { status: 400 }
+      );
+    }
+
+    const { businessId } = parsed.data;
+
+    const business =
+      await persistenceService.getBusinessById(businessId);
+
+    if (!business) {
+      return NextResponse.json(
+        { error: "Business not found" },
+        { status: 404 }
+      );
+    }
+
+    // Determine best contact email from enrichment data
+    const contactEmail =
+      business.enrichment?.emails?.[0]?.address || null;
+
+    // Calculate Opportunity Score at add time
+    const opportunityScore = opportunityService.calculateScore(business);
+
+    const prospect =
+      await prospectPersistenceService.createProspect(
+        businessId,
+        contactEmail,
+        opportunityScore,
+        business
+      );
+
+    if (!prospect) {
+      throw new Error("Failed to create prospect.");
+    }
+
+    return NextResponse.json({ prospect });
+  } catch (error: any) {
+    logger.error(
+      "[API /prospects] Creation failed:",
+      error.message
+    );
+
+    return NextResponse.json(
+      { error: "Failed to create prospect" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+
+    const status =
+      searchParams.get("status") as PipelineStatus | null;
+
+    const prospects =
+      await prospectPersistenceService.getAllProspects(
+        status || undefined
+      );
+
+    // NEW: Sort prospects by priorityScore descending (nulls last)
+    const sortedProspects = prospects.sort((a, b) => {
+      const scoreA = a.priorityScore || -1;
+      const scoreB = b.priorityScore || -1;
+      return scoreB - scoreA;
+    });
+
+    // Enrich prospects with business name and audit score for the UI list
+    const enrichedProspects = await Promise.all(
+      sortedProspects.map(async (p) => {
+        const business =
+          await persistenceService.getBusinessById(
+            p.businessId
+          );
+
+        const latestAudit =
+          await auditPersistenceService.getLatestAudit(
+            p.businessId
+          );
+
+        return {
+          ...p,
+          businessName:
+            business?.name || p.businessSnapshot?.name || "Unknown Business",
+          auditScore:
+            latestAudit?.audit.overallScore || null,
+        };
+      })
+    );
+
+    return NextResponse.json({
+      prospects: enrichedProspects,
+    });
+  } catch (error: any) {
+    logger.error(
+      "[API /prospects] Fetch failed:",
+      error.message
+    );
+
+    return NextResponse.json(
+      { error: "Failed to fetch prospects" },
+      { status: 500 }
+    );
+  }
+}
