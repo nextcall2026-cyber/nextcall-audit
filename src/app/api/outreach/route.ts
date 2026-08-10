@@ -4,11 +4,13 @@ import { prospectPersistenceService } from "@/services/prospectPersistenceServic
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
 import { emailService } from "@/services/emailService";
+import { EmailAttachment } from "@/services/emailProvider";
 import { outreachSafetyService } from "@/services/outreachSafetyService";
 import { renderEmailHtml } from "@/lib/emailRenderer";
 import { logger } from "@/lib/logger";
 import { ValidationError } from "@/lib/errors";
 import { priorityService } from "@/services/priorityService";
+import { reportService } from "@/services/reportService";
 import { rateLimit } from "@/lib/rateLimiter";
 
 const SendOutreachSchema = z.object({
@@ -50,8 +52,21 @@ export async function POST(request: NextRequest) {
     const business = await persistenceService.getBusinessById(prospect.businessId);
     const businessName = business?.name || "your business";
 
+    // 4b. Generate the PDF audit report and attach it to the email
+    let auditAttachment: EmailAttachment | undefined;
+    try {
+      const pdfBuffer = await reportService.generatePdfBuffer(prospect.businessId);
+      auditAttachment = {
+        filename: `NextCall_Audit_${businessName.replace(/[^\w\s-]/g, "").replace(/\s+/g, "_")}.pdf`,
+        content: pdfBuffer,
+        contentType: "application/pdf",
+      };
+    } catch (pdfError: any) {
+      logger.warn(`[API /outreach] PDF generation failed, sending without attachment: ${pdfError.message}`);
+    }
+
     // 5. Generate Email Content (Plain Text)
-    const subject = `Quick question regarding ${businessName}'s online presence`;
+    const subject = `Your digital presence audit for ${businessName}`;
     const plainTextBody = `
       Hi ${businessName} Team,
       
@@ -62,7 +77,9 @@ export async function POST(request: NextRequest) {
       Key Opportunity Identified:
       ${storedAudit.aiReport.nextCallRelevance}
       
-      Would you be open to a quick 5-minute chat next week to discuss this? I can also send over the full PDF audit report if you're interested.
+      ${auditAttachment ? "I've attached the full PDF audit report for you to review." : "Would you like me to send over the full PDF audit report?"}
+      
+      Would you be open to a quick 5-minute chat next week to discuss this?
       
       Best regards,
       The NextCall Team
@@ -100,7 +117,8 @@ export async function POST(request: NextRequest) {
       to: prospect.contactEmail!,
       subject,
       html: htmlBody,
-      idempotencyKey
+      idempotencyKey,
+      attachments: auditAttachment ? [auditAttachment] : undefined,
     });
 
     // 10. Update Record & Prospect State

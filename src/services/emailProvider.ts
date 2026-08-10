@@ -5,6 +5,13 @@ export interface SendEmailInput {
   subject: string;
   html: string;
   idempotencyKey: string; // Critical for safe retries
+  attachments?: EmailAttachment[];
+}
+
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer | Uint8Array | string;
+  contentType?: string;
 }
 
 export interface SendEmailOutput {
