@@ -4,7 +4,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { persistenceService } from "@/services/persistenceService";
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { AuditReportDocument } from "@/components/reports/AuditReportDocument";
-import { ReportViewModel, ReportCategoryScore, Business, AuditResult, AuditReport } from "@/types";
+import { ReportViewModel, ReportCategoryScore, AuditCategoryName, Business, AuditResult, AuditReport } from "@/types";
 import { logger } from "@/lib/logger";
 import { ValidationError } from "@/lib/errors";
 
@@ -60,6 +60,18 @@ export class ReportService {
             score: data.score
         }));
 
+        // Group findings by category for the narrative sections
+        const categoryDetails = categoryScores.map((c) => ({
+            key: c.name.toUpperCase() as AuditCategoryName,
+            name: c.name,
+            score: c.score,
+            findings: audit.findings.filter((f) => f.category === c.name.toUpperCase())
+        }));
+
+        const enrichment = business.enrichment;
+        const phones = enrichment?.phones ?? [];
+        const websiteData = enrichment?.website;
+
         return {
             businessName: business.name || "Unknown Business",
             category: business.categories?.[0] || "General",
@@ -69,6 +81,16 @@ export class ReportService {
             overallScore: audit.overallScore,
             confidence: audit.confidence,
             categoryScores,
+            categoryDetails,
+            signals: {
+                phone: phones[0]?.normalized ?? null,
+                website: websiteData?.url ?? business.website ?? null,
+                preferredEmail: enrichment?.preferredEmail ?? null,
+                rating: business.rating ?? null,
+                reviewCount: business.reviewCount ?? null,
+                bookingDetected: enrichment?.booking?.detected ?? false,
+                bookingSystem: enrichment?.booking?.systemName ?? null
+            },
             aiReport,
             nextCallOpportunities: audit.opportunities
         };

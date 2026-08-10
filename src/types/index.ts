@@ -221,6 +221,23 @@ export interface ReportCategoryScore {
   score: number;
 }
 
+export interface ReportCategoryDetail {
+  key: AuditCategoryName;
+  name: string;
+  score: number;
+  findings: AuditFinding[];
+}
+
+export interface ReportSignals {
+  phone: string | null;
+  website: string | null;
+  preferredEmail: string | null;
+  rating: number | null;
+  reviewCount: number | null;
+  bookingDetected: boolean;
+  bookingSystem: string | null;
+}
+
 export interface ReportViewModel {
   businessName: string;
   category: string;
@@ -230,6 +247,8 @@ export interface ReportViewModel {
   overallScore: number;
   confidence: string;
   categoryScores: ReportCategoryScore[];
+  categoryDetails: ReportCategoryDetail[];
+  signals: ReportSignals;
   aiReport: AuditReport;
   nextCallOpportunities: NextCallOpportunity[];
 }
