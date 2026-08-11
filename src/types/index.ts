@@ -10,8 +10,8 @@ export interface BoundingBox {
 }
 
 export interface BusinessLocation {
-  lat: number;
-  lng: number;
+  lat?: number;
+  lng?: number;
   address?: string;
   city?: string;
   state?: string;

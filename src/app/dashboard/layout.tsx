@@ -4,11 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/dashboard/LogoutButton";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Compass, Kanban, Settings } from "lucide-react";
+import { LayoutDashboard, Compass, Kanban, Settings, Camera } from "lucide-react";
 
 const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/dashboard/discovery", label: "Business Discovery", icon: Compass },
+    { href: "/dashboard/screenshot", label: "From Screenshot", icon: Camera },
     { href: "/dashboard/pipeline", label: "Pipeline", icon: Kanban },
     { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
