@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import { Business } from "@/types";
+import { Business, EnrichmentData } from "@/types";
 import { persistenceService } from "@/services/persistenceService";
 import { enrichmentService } from "@/services/enrichmentService";
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { auditEngine } from "@/services/auditService";
 import { aiReportService } from "@/services/aiReportService";
 import { priorityService } from "@/services/priorityService";
+import { parseBusinessNotes, ParsedNotes } from "@/services/notesParser";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 
@@ -24,6 +25,7 @@ const ManualBusinessSchema = z.object({
   reviewCount: z.number().int().min(0).optional().nullable(),
   category: z.string().trim().optional().nullable(),
   email: z.string().trim().email("Invalid email address").optional().nullable(),
+  notes: z.string().trim().optional().nullable(),
 });
 
 function normalizeWebsite(input: string | null | undefined): string | null {
@@ -32,6 +34,44 @@ function normalizeWebsite(input: string | null | undefined): string | null {
   if (!trimmed) return null;
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return `https://${trimmed}`;
   return trimmed;
+}
+
+/**
+ * Merges user-provided signals from the notes box into the enrichment
+ * result AFTER the website crawl, so anything the user verified manually
+ * (socials, booking, email) is scored by the audit even if the crawl
+ * missed it. Crawl findings are never overwritten.
+ */
+function mergeNotesIntoEnrichment(
+  enrichment: EnrichmentData,
+  parsed: ParsedNotes
+): EnrichmentData {
+  const merged: EnrichmentData = { ...enrichment };
+
+  if (parsed.socialProfiles.length > 0) {
+    const existing = enrichment.socialProfiles || [];
+    const seen = new Set(existing.map((s) => s.url));
+    const added = parsed.socialProfiles.filter((s) => !seen.has(s.url));
+    if (added.length > 0) {
+      merged.socialProfiles = [...existing, ...added];
+    }
+  }
+
+  if (parsed.emails.length > 0) {
+    const existing = enrichment.emails || [];
+    const seen = new Set(existing.map((e) => e.address));
+    const added = parsed.emails.filter((e) => !seen.has(e.address));
+    if (added.length > 0) {
+      merged.emails = [...existing, ...added];
+    }
+    merged.preferredEmail = merged.preferredEmail || parsed.emails[0].address;
+  }
+
+  if (parsed.booking && !enrichment.booking?.detected) {
+    merged.booking = parsed.booking;
+  }
+
+  return merged;
 }
 
 export async function POST(request: NextRequest) {
@@ -52,13 +92,15 @@ export async function POST(request: NextRequest) {
 
     const d = parsed.data;
     const id = randomUUID();
-    const website = normalizeWebsite(d.website);
+    const notesItem = d.notes ? parseBusinessNotes(d.notes) : null;
+    // A website pasted in the notes can still feed the crawl if the field was empty
+    const website = normalizeWebsite(d.website) ?? notesItem?.website ?? null;
     const hasLocationPart = Boolean(d.address || d.city || d.state || d.zip || d.country);
 
     const business: Business = {
       id,
       name: d.name,
-      phone: d.phone || undefined,
+      phone: d.phone || notesItem?.phone || undefined,
       website: website || undefined,
       location: hasLocationPart
         ? {
@@ -95,10 +137,14 @@ export async function POST(request: NextRequest) {
     // 1. Persist the manually entered business
     await persistenceService.upsertBusiness(business);
 
-    // 2. Run enrichment (crawls the website when one was provided)
+    // 2. Run enrichment (crawls the website when one was provided), then merge
+    //    any user-verified signals from the notes box on top of the crawl data.
     const enrichmentData = await enrichmentService.enrichBusiness(business);
-    await persistenceService.updateEnrichmentData(id, enrichmentData);
-    const enrichedBusiness: Business = { ...business, enrichment: enrichmentData };
+    const mergedEnrichment = notesItem
+      ? mergeNotesIntoEnrichment(enrichmentData, notesItem)
+      : enrichmentData;
+    await persistenceService.updateEnrichmentData(id, mergedEnrichment);
+    const enrichedBusiness: Business = { ...business, enrichment: mergedEnrichment };
 
     // 3. Run the deterministic audit + AI report
     const auditResult = await auditEngine.runAudit(enrichedBusiness);

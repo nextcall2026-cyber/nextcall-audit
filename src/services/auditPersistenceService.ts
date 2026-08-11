@@ -60,6 +60,19 @@ export class AuditPersistenceService {
       logger.error(`[AuditPersistenceService] Failed to save AI report for ${auditId}:`, error.message);
     }
   }
+
+  /**
+   * Deletes every audit record (and AI report) for a business.
+   */
+  async deleteAuditsForBusiness(businessId: string): Promise<void> {
+    try {
+      const collection = await getAuditsCollection();
+      await collection.deleteMany({ businessId });
+      logger.info(`[AuditPersistenceService] Deleted audits for business ${businessId}.`);
+    } catch (error: any) {
+      logger.error(`[AuditPersistenceService] Failed to delete audits for business ${businessId}:`, error.message);
+    }
+  }
 }
 
 export const auditPersistenceService = new AuditPersistenceService();

@@ -127,3 +127,31 @@ export async function PATCH(
     return NextResponse.json({ error: "Failed to update prospect" }, { status: 500 });
   }
 }
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+
+    const prospect = await prospectPersistenceService.getProspectById(id);
+    if (!prospect) {
+      return NextResponse.json({ error: "Prospect not found" }, { status: 404 });
+    }
+
+    // Delete the prospect plus everything tied to it: outreach history,
+    // audit records, and the business document itself.
+    await prospectPersistenceService.deleteProspect(id);
+    await outreachPersistenceService.deleteOutreachForProspect(id);
+    await auditPersistenceService.deleteAuditsForBusiness(prospect.businessId);
+    await persistenceService.deleteBusiness(prospect.businessId);
+
+    logger.info(`[API /prospects/[id]] Deleted prospect ${id} (business ${prospect.businessId}).`);
+
+    return NextResponse.json({ deleted: true });
+  } catch (error: any) {
+    logger.error("[API /prospects/[id]] Delete failed:", error.message);
+    return NextResponse.json({ error: "Failed to delete prospect" }, { status: 500 });
+  }
+}

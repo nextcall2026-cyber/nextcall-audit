@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Prospect, PipelineStatus, OpportunityScore } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Trash2 } from "lucide-react";
 import { logger } from "@/lib/logger";
 import Link from "next/link";
 
@@ -67,6 +68,22 @@ export default function PipelineClient() {
         return "UPCOMING";
     };
 
+    const handleDelete = async (prospect: EnrichedProspect) => {
+        if (!window.confirm(`Delete "${prospect.businessName}" from the pipeline? This also removes its audit and business record.`)) return;
+        try {
+            const response = await fetch(`/api/prospects/${prospect.id}`, { method: "DELETE" });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({ error: "Delete failed" }));
+                throw new Error(data.error || "Delete failed");
+            }
+            setProspects(prev => prev.filter(p => p.id !== prospect.id));
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            logger.error("[PipelineClient] Delete failed:", message);
+            window.alert(`Delete failed: ${message}`);
+        }
+    };
+
     const displayedProspects = activeFilter === "DUE"
         ? prospects.filter(p => {
             const status = getFollowUpStatus(p.nextFollowUpAt);
@@ -107,69 +124,86 @@ export default function PipelineClient() {
                 {displayedProspects.map((p) => {
                     const followUpStatus = getFollowUpStatus(p.nextFollowUpAt);
                     const isUnread = !p.viewAddedAt;
+                    const hasAudit = p.auditScore !== null;
 
                     return (
-                        <Link href={`/dashboard/pipeline/${p.id}`} key={p.id}>
+                        <Link href={`/dashboard/pipeline/${p.id}`} key={p.id} className="block">
                             <Card className={`hover:shadow-md transition-shadow cursor-pointer mb-3 ${isUnread ? 'border-l-4 border-l-blue-500 bg-blue-50/30' : ''}`}>
-                                <CardContent className="p-4 flex justify-between items-center">
-                                    <div className="flex flex-col">
-                                        <div className="flex items-center gap-2">
-                                            <span className={`font-medium ${isUnread ? 'text-slate-900 font-bold' : 'text-slate-700'}`}>
-                                                {isUnread && <span className="text-blue-500 mr-1">●</span>}
-                                                {p.businessName}
+                            <CardContent className="p-4 flex justify-between items-center">
+                                <div className="flex flex-col">
+                                    <div className="flex items-center gap-2">
+                                        <span className={`font-medium ${isUnread ? 'text-slate-900 font-bold' : 'text-slate-700'}`}>
+                                            {isUnread && <span className="text-blue-500 mr-1">●</span>}
+                                            {p.businessName}
+                                        </span>
+                                        {p.priorityLevel && (
+                                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                                p.priorityLevel === 'HOT' ? 'bg-red-100 text-red-700' :
+                                                p.priorityLevel === 'HIGH' ? 'bg-orange-100 text-orange-700' :
+                                                p.priorityLevel === 'MEDIUM' ? 'bg-yellow-100 text-yellow-700' :
+                                                'bg-gray-100 text-gray-700'
+                                            }`}>
+                                                {p.priorityLevel}
                                             </span>
-                                            {p.priorityLevel && (
-                                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                                                    p.priorityLevel === 'HOT' ? 'bg-red-100 text-red-700' :
-                                                    p.priorityLevel === 'HIGH' ? 'bg-orange-100 text-orange-700' :
-                                                    p.priorityLevel === 'MEDIUM' ? 'bg-yellow-100 text-yellow-700' :
-                                                    'bg-gray-100 text-gray-700'
-                                                }`}>
-                                                    {p.priorityLevel}
-                                                </span>
-                                            )}
-                                            {isUnread && (
-                                                <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-medium uppercase tracking-wide">New</span>
-                                            )}
+                                        )}
+                                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium uppercase tracking-wide ${
+                                            hasAudit ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                                        }`}>
+                                            {hasAudit ? '✓ Audit ran' : 'No audit yet'}
+                                        </span>
+                                        {isUnread && (
+                                            <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-medium uppercase tracking-wide">New</span>
+                                        )}
+                                    </div>
+                                    <span className="text-xs text-gray-500 mt-1">
+                                        Status: <span className="font-medium text-slate-700">{p.pipelineStatus.replace(/_/g, " ")}</span>
+                                    </span>
+                                </div>
+
+                                <div className="flex items-center gap-6">
+                                    {/* Opportunity Score */}
+                                    {p.opportunityScore && (
+                                        <div className="text-right hidden sm:block">
+                                            <span className="block text-xs text-gray-500 uppercase tracking-wide">Opportunity</span>
+                                            <span className={`text-sm font-bold ${getOppColor(p.opportunityScore)}`}>
+                                                {p.opportunityScore.score}
+                                            </span>
                                         </div>
-                                        <span className="text-xs text-gray-500 mt-1">
-                                            Status: <span className="font-medium text-slate-700">{p.pipelineStatus.replace(/_/g, " ")}</span>
+                                    )}
+
+                                    {/* Follow Up Indicator */}
+                                    <div className="text-right hidden sm:block">
+                                        <span className="block text-xs text-gray-500 uppercase tracking-wide">Next Follow-up</span>
+                                        <span className={`text-sm font-medium ${followUpStatus === "OVERDUE" ? "text-red-600" :
+                                                followUpStatus === "DUE_TODAY" ? "text-orange-600" :
+                                                    "text-slate-700"
+                                            }`}>
+                                            {p.nextFollowUpAt ? new Date(p.nextFollowUpAt).toLocaleDateString() : "—"}
+                                            {followUpStatus === "OVERDUE" && " (Overdue)"}
+                                            {followUpStatus === "DUE_TODAY" && " (Today)"}
                                         </span>
                                     </div>
 
-                                    <div className="flex items-center gap-6">
-                                        {/* Opportunity Score */}
-                                        {p.opportunityScore && (
-                                            <div className="text-right hidden sm:block">
-                                                <span className="block text-xs text-gray-500 uppercase tracking-wide">Opportunity</span>
-                                                <span className={`text-sm font-bold ${getOppColor(p.opportunityScore)}`}>
-                                                    {p.opportunityScore.score}
-                                                </span>
-                                            </div>
-                                        )}
-
-                                        {/* Follow Up Indicator */}
-                                        <div className="text-right hidden sm:block">
-                                            <span className="block text-xs text-gray-500 uppercase tracking-wide">Next Follow-up</span>
-                                            <span className={`text-sm font-medium ${followUpStatus === "OVERDUE" ? "text-red-600" :
-                                                    followUpStatus === "DUE_TODAY" ? "text-orange-600" :
-                                                        "text-slate-700"
-                                                }`}>
-                                                {p.nextFollowUpAt ? new Date(p.nextFollowUpAt).toLocaleDateString() : "—"}
-                                                {followUpStatus === "OVERDUE" && " (Overdue)"}
-                                                {followUpStatus === "DUE_TODAY" && " (Today)"}
-                                            </span>
-                                        </div>
-
-                                        {/* Audit Score */}
-                                        <div className="text-right">
-                                            <span className="block text-xs text-gray-500 uppercase tracking-wide">Audit</span>
-                                            <span className={`text-lg font-bold ${getScoreColor(p.auditScore)}`}>
-                                                {p.auditScore !== null ? p.auditScore : "N/A"}
-                                            </span>
-                                        </div>
+                                    {/* Audit Score */}
+                                    <div className="text-right">
+                                        <span className="block text-xs text-gray-500 uppercase tracking-wide">Audit</span>
+                                        <span className={`text-lg font-bold ${getScoreColor(p.auditScore)}`}>
+                                            {p.auditScore !== null ? p.auditScore : "N/A"}
+                                        </span>
                                     </div>
-                                </CardContent>
+
+                                    {/* Delete */}
+                                    <button
+                                        type="button"
+                                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(p); }}
+                                        className="rounded-md p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors"
+                                        title="Delete prospect"
+                                        aria-label={`Delete ${p.businessName}`}
+                                    >
+                                        <Trash2 className="h-4 w-4" />
+                                    </button>
+                                </div>
+                            </CardContent>
                             </Card>
                         </Link>
                     );

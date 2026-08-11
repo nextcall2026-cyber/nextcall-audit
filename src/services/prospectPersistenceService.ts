@@ -343,6 +343,19 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
   }
 
     /**
+   * Permanently deletes a prospect record.
+   */
+  async deleteProspect(id: string): Promise<void> {
+    try {
+      const collection = await getProspectsCollection();
+      await collection.deleteOne({ id });
+      logger.info(`[ProspectPersistenceService] Deleted prospect ${id}.`);
+    } catch (error: any) {
+      logger.error(`[ProspectPersistenceService] Failed to delete prospect ${id}:`, error.message);
+    }
+  }
+
+    /**
     * NEW: Updates the priority score, level, and breakdown for a prospect.
     */
   async updatePriority(

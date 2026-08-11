@@ -103,7 +103,7 @@ export class PersistenceService {
     );
   }
 
-  async updateEnrichmentData(id: string, enrichment: EnrichmentData): Promise<void> {
+async updateEnrichmentData(id: string, enrichment: EnrichmentData): Promise<void> {
     const collection = await withDbRetry(() => getBusinessesCollection());
     // We use $set to ONLY update the enrichment field, preserving discovery data
     await withDbRetry(() =>
@@ -117,7 +117,19 @@ export class PersistenceService {
         }
       )
     );
-    logger.info(`[PersistenceService] Updated enrichment for business ${id}. Status: ${enrichment.status}`);
+  }
+
+  /**
+   * Permanently deletes a business document and any data tied to it.
+   */
+async deleteBusiness(id: string): Promise<void> {
+    try {
+      const collection = await withDbRetry(() => getBusinessesCollection());
+      await withDbRetry(() => collection.deleteOne({ id }));
+      logger.info(`[PersistenceService] Deleted business ${id}.`);
+    } catch (error: any) {
+      logger.error(`[PersistenceService] Failed to delete business ${id}:`, error.message);
+    }
   }
 }
 

@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Upload,
@@ -56,6 +57,7 @@ export default function ScreenshotClient() {
   const [inPipeline, setInPipeline] = useState(false);
   const [fields, setFields] = useState<ExtractedFields>(EMPTY_FIELDS);
   const [missing, setMissing] = useState<string[]>([]);
+  const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
     businessId: string;
@@ -67,7 +69,7 @@ export default function ScreenshotClient() {
   const handleFile = (file: File | null) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      setError("Please upload an image file (PNG, JPG, WEBP).");
+      setError("Please paste/upload an image file (PNG, JPG, WEBP).");
       return;
     }
     if (file.size > 8 * 1024 * 1024) {
@@ -83,6 +85,29 @@ export default function ScreenshotClient() {
     if (previewUrl) window.URL.revokeObjectURL(previewUrl);
     setPreviewUrl(window.URL.createObjectURL(file));
   };
+
+  // Paste from clipboard (Ctrl+V) anywhere on the page.
+  // Only fires when the clipboard actually contains an image, so it never
+  // interferes with pasting text into the data fields.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            handleFile(file);
+          }
+          break;
+        }
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewUrl]);
 
   const handleExtract = async () => {
     if (!selectedFile) return;
@@ -138,6 +163,7 @@ export default function ScreenshotClient() {
         reviewCount: fields.reviewCount.trim() ? Number(fields.reviewCount) : null,
         category: fields.category.trim() || null,
         email: fields.email.trim() || null,
+        notes: notes.trim() || null,
       };
 
       const response = await fetch("/api/businesses/manual", {
@@ -257,7 +283,8 @@ export default function ScreenshotClient() {
               ) : (
                 <>
                   <Upload className="h-6 w-6" />
-                  <span className="text-xs">Click to choose a screenshot</span>
+                  <span className="text-xs font-medium">Paste screenshot here (Ctrl+V)</span>
+                  <span className="text-[10px] text-muted-foreground/60">or click to choose a file</span>
                   <span className="text-[10px] text-muted-foreground/60">PNG / JPG / WEBP · max 8 MB</span>
                 </>
               )}
@@ -352,7 +379,23 @@ export default function ScreenshotClient() {
 
             {error && <p className="mt-4 text-sm font-medium text-destructive">{error}</p>}
 
-            <div className="mt-5 flex flex-wrap items-center gap-3">
+            <div className="mt-5 flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground">
+                Anything else you know about this business?
+              </label>
+              <Textarea
+                rows={3}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder={"e.g. Instagram: instagram.com/jlplumbing · books through Calendly (calendly.com/jlplumbing) · email: info@jlplumbing.com"}
+              />
+              <span className="text-[10px] text-muted-foreground/70">
+                Social links, booking platform, email, phone, website — anything you verified on their
+                website. These feed the audit so it doesn&apos;t miss signals the crawl couldn&apos;t find.
+              </span>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <Button onClick={handleCreate} disabled={creating} className="gap-2">
                 {creating ? (
                   <>

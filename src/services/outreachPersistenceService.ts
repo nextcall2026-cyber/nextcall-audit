@@ -172,6 +172,19 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
    * NEW: Updates the delivery status of an outreach record based on webhook events.
    * Also returns the prospectId so the caller can suppress the prospect if needed.
    */
+  /**
+   * Deletes all outreach history records for a prospect.
+   */
+  async deleteOutreachForProspect(prospectId: string): Promise<void> {
+    try {
+      const collection = await getOutreachCollection();
+      await collection.deleteMany({ prospectId });
+      logger.info(`[OutreachPersistenceService] Deleted outreach for prospect ${prospectId}.`);
+    } catch (error: any) {
+      logger.error(`[OutreachPersistenceService] Failed to delete outreach for prospect ${prospectId}:`, error.message);
+    }
+  }
+
   async updateDeliveryStatus(
     resendMessageId: string, 
     status: 'DELIVERED' | 'BOUNCED' | 'COMPLAINED', 
