@@ -68,6 +68,7 @@ async createPendingOutreach(
         error: null,
         sentAt: new Date().toISOString(),
         deliveredAt: null,
+        openedAt: null,
       };
 
       await collection.insertOne(newRecord);
@@ -182,6 +183,58 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
       logger.info(`[OutreachPersistenceService] Deleted outreach for prospect ${prospectId}.`);
     } catch (error: any) {
       logger.error(`[OutreachPersistenceService] Failed to delete outreach for prospect ${prospectId}:`, error.message);
+    }
+  }
+
+  /**
+   * Replaces the HTML body of a PENDING outreach record.
+   * Used to attach the open-tracking pixel once the record id is known.
+   */
+  async updateBody(id: string, body: string): Promise<void> {
+    try {
+      const collection = await getOutreachCollection();
+      await collection.updateOne({ id, status: "PENDING" }, { $set: { body } });
+    } catch (error: any) {
+      logger.error(`[OutreachPersistenceService] Failed to update body for outreach ${id}:`, error.message);
+    }
+  }
+
+  /**
+   * Records the first time an outreach email was opened (tracking pixel hit).
+   * Idempotent: only sets the timestamp if it is still null.
+   */
+  async markOpened(id: string): Promise<void> {
+    try {
+      const collection = await getOutreachCollection();
+      const result = await collection.updateOne(
+        { id, openedAt: null },
+        { $set: { openedAt: new Date().toISOString() } }
+      );
+      if (result.modifiedCount > 0) {
+        logger.info(`[OutreachPersistenceService] Recorded open for outreach ${id}.`);
+      }
+    } catch (error: any) {
+      logger.error(`[OutreachPersistenceService] Failed to record open for outreach ${id}:`, error.message);
+    }
+  }
+
+  /**
+   * Fetches all outreach records that were sent AND opened.
+   * Used by the follow-up automation sweep. An open already implies delivery,
+   * so this works even without the delivery webhook configured.
+   */
+  async getOpenedRecords(): Promise<OutreachRecord[]> {
+    try {
+      const collection = await getOutreachCollection();
+      const cursor = collection.find({
+        status: "SENT",
+        openedAt: { $ne: null },
+      });
+      const docs = await cursor.toArray();
+      return docs as unknown as OutreachRecord[];
+    } catch (error: any) {
+      logger.error("[OutreachPersistenceService] Failed to fetch opened outreach records:", error.message);
+      return [];
     }
   }
 

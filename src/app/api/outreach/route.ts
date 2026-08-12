@@ -7,6 +7,7 @@ import { emailService } from "@/services/emailService";
 import { EmailAttachment } from "@/services/emailProvider";
 import { outreachSafetyService } from "@/services/outreachSafetyService";
 import { renderEmailHtml } from "@/lib/emailRenderer";
+import { getOpenTrackingUrl } from "@/lib/openTracking";
 import { logger } from "@/lib/logger";
 import { ValidationError } from "@/lib/errors";
 import { priorityService } from "@/services/priorityService";
@@ -85,16 +86,14 @@ export async function POST(request: NextRequest) {
       The NextCall Team
     `;
 
-    // 6. Render Safe HTML
-    const htmlBody = renderEmailHtml(plainTextBody);
-
-    // 7. Create Pending Outreach Record
+    // 7. Create Pending Outreach Record (body is filled after, once the
+    //    record id is known, so the open-tracking pixel can reference it)
     const pendingRecord = await outreachPersistenceService.createPendingOutreach(
       prospectId,
       prospect.businessId,
       prospect.contactEmail!,
       subject,
-      htmlBody,
+      "",
       'INITIAL',
       0,
       'OFFER_AUDIT',
@@ -102,6 +101,10 @@ export async function POST(request: NextRequest) {
     );
 
     if (!pendingRecord) throw new Error("Failed to create outreach record.");
+
+    // 6b. Render Safe HTML with the open-tracking pixel attached
+    const htmlBody = renderEmailHtml(plainTextBody, getOpenTrackingUrl(pendingRecord.id));
+    await outreachPersistenceService.updateBody(pendingRecord.id, htmlBody);
 
     // 8. ATOMIC CLAIM: Attempt to transition state from UNCONTACTED to INITIAL_SENT
     const claimSuccess = await prospectPersistenceService.claimOutreachState(prospectId, 'UNCONTACTED', 'INITIAL_SENT');

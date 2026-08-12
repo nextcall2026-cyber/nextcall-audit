@@ -5,6 +5,7 @@ import { outreachPersistenceService } from "@/services/outreachPersistenceServic
 import { emailService } from "@/services/emailService";
 import { outreachSafetyService } from "@/services/outreachSafetyService";
 import { renderEmailHtml } from "@/lib/emailRenderer";
+import { getOpenTrackingUrl } from "@/lib/openTracking";
 import { logger } from "@/lib/logger";
 import { ValidationError } from "@/lib/errors";
 import { priorityService } from "@/services/priorityService";
@@ -44,16 +45,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: e.message }, { status: 409 });
     }
 
-    // 3. Render Safe HTML
-    const htmlBody = renderEmailHtml(plainTextBody);
-
     // 4. Create Pending Outreach Record
     const pendingRecord = await outreachPersistenceService.createPendingOutreach(
       prospectId,
       prospect.businessId,
       prospect.contactEmail!,
       subject,
-      htmlBody,
+      "",
       'FOLLOW_UP',
       stage as OutreachStage,
       ctaType as CTAType,
@@ -61,6 +59,10 @@ export async function POST(request: NextRequest) {
     );
 
     if (!pendingRecord) throw new Error("Failed to create outreach record.");
+
+    // 3b. Render Safe HTML with the open-tracking pixel attached
+    const htmlBody = renderEmailHtml(plainTextBody, getOpenTrackingUrl(pendingRecord.id));
+    await outreachPersistenceService.updateBody(pendingRecord.id, htmlBody);
 
     // 5. ATOMIC CLAIM: Map stage to expected state and new state
     const stateMap: Record<number, { expected: OutreachSequenceState, next: OutreachSequenceState }> = {

@@ -30,6 +30,9 @@ const envSchema = z.object({
   // Authentication
   APP_PASSWORD: z.string().min(8, "APP_PASSWORD must be at least 8 characters"),
 
+  // Public base URL used for email open-tracking pixels
+  NEXT_PUBLIC_APP_URL: z.string().url().optional(),
+
   // Node environment
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
  });

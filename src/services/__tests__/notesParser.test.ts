@@ -56,4 +56,39 @@ describe("parseBusinessNotes", () => {
     expect(parsed.phone).toBeNull();
     expect(parsed.website).toBeNull();
   });
+
+  it("credits social platforms mentioned by keyword alone (no URL)", () => {
+    const parsed = parseBusinessNotes(
+      "They have a Facebook page and Instagram, plus a Tiktok"
+    );
+    const platforms = parsed.socialProfiles.map((s) => s.platform);
+    expect(platforms).toContain("facebook");
+    expect(platforms).toContain("instagram");
+    expect(platforms).toContain("tiktok");
+    expect(parsed.socialProfiles.every((s) => s.confidence === 60)).toBe(true);
+  });
+
+  it("does not credit a platform the note says is absent", () => {
+    const parsed = parseBusinessNotes("no facebook page, and no instagram either");
+    expect(parsed.socialProfiles).toEqual([]);
+  });
+
+  it("does not duplicate a platform already given as a URL", () => {
+    const parsed = parseBusinessNotes("instagram.com/jlplumbing and they are on Instagram");
+    const instagrams = parsed.socialProfiles.filter((s) => s.platform === "instagram");
+    expect(instagrams).toHaveLength(1);
+    expect(instagrams[0].url).toBe("https://instagram.com/jlplumbing");
+  });
+
+  it("detects booking from a book-online button phrase with no URL", () => {
+    const parsed = parseBusinessNotes("they have a book online button on their website");
+    expect(parsed.booking?.detected).toBe(true);
+    expect(parsed.booking?.systemName).toBe("online booking");
+    expect(parsed.booking?.url).toBeUndefined();
+  });
+
+  it("does not detect booking when the note explicitly says there is none", () => {
+    const parsed = parseBusinessNotes("no booking system, no book online button");
+    expect(parsed.booking).toBeNull();
+  });
 });

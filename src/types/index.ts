@@ -394,6 +394,7 @@ export interface OutreachRecord {
   error: string | null;
   sentAt: string;
   deliveredAt: string | null; 
+  openedAt: string | null;
 }
 
 export interface FollowUpDraft {

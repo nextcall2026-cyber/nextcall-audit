@@ -54,6 +54,26 @@ const BOOKING_KEYWORD_RE =
 const NO_BOOKING_RE =
   /\b(?:no|without|doesn'?t|does\s+not|don'?t|not)\b[^.\n]{0,60}\b(?:online\s+)?booking\b/gi;
 
+// Keyword-only social detection: users often write "they have a Facebook page"
+// or "Instagram: @jlplumbing" without a URL. These produce low-confidence
+// profiles (no URL) so the audit can still credit the platform.
+const SOCIAL_KEYWORDS: Record<string, Platform> = {
+  facebook: "facebook",
+  instagram: "instagram",
+  insta: "instagram",
+  linkedin: "linkedin",
+  tiktok: "tiktok",
+  youtube: "youtube",
+  twitter: "twitter",
+};
+
+const SOCIAL_KEYWORD_RE =
+  /\b(facebook|instagram|insta|linkedin|tiktok|youtube|twitter)\b/gi;
+
+// "they don't have facebook" should not credit a profile
+const NO_SOCIAL_RE =
+  /\b(?:no|without|doesn'?t|does\s+not|don'?t|not)\b[^.\n]{0,40}\b(?:facebook|instagram|insta|linkedin|tiktok|youtube|twitter)\b/gi;
+
 export interface ParsedNotes {
   socialProfiles: SocialProfile[];
   booking: BookingData | null;
@@ -117,6 +137,7 @@ export function parseBusinessNotes(notes: string): ParsedNotes {
 
   // Booking by keyword: e.g. "they take bookings at jlplumbing.com/appointments"
   if (!noBooking && bookingUrls.length === 0) {
+    BOOKING_KEYWORD_RE.lastIndex = 0;
     const kw = BOOKING_KEYWORD_RE.exec(notes.toLowerCase());
     if (kw && genericUrls.length > 0) {
       const url = genericUrls[0];
@@ -127,15 +148,47 @@ export function parseBusinessNotes(notes: string): ParsedNotes {
     }
   }
 
-  const bookingUrl = bookingUrls[0] || null;
+  // Booking by keyword alone: e.g. "they have a book online button on the
+  // website" (no URL in the notes). Credit a generic online booking signal.
+  BOOKING_KEYWORD_RE.lastIndex = 0;
+  const hasBookingKeyword = BOOKING_KEYWORD_RE.test(notes.toLowerCase());
+  if (!noBooking && bookingUrls.length === 0 && hasBookingKeyword) {
+    bookingUrls.push(""); // sentinel handled below
+  }
+
+  // Keyword-only social profiles: "they have a Facebook page and Instagram"
+  const negated = new Set<string>();
+  NO_SOCIAL_RE.lastIndex = 0;
+  while ((match = NO_SOCIAL_RE.exec(notes.toLowerCase())) !== null) {
+    for (const keyword of Object.keys(SOCIAL_KEYWORDS)) {
+      if (match[0].includes(keyword)) negated.add(keyword);
+    }
+  }
+
+  SOCIAL_KEYWORD_RE.lastIndex = 0;
+  const seenPlatforms = new Set(socialProfiles.map((s) => s.platform));
+  while ((match = SOCIAL_KEYWORD_RE.exec(notes.toLowerCase())) !== null) {
+    const keyword = match[1].toLowerCase();
+    const platform = SOCIAL_KEYWORDS[keyword];
+    if (!platform || seenPlatforms.has(platform) || negated.has(keyword)) continue;
+    seenPlatforms.add(platform);
+    socialProfiles.push({
+      platform,
+      url: "",
+      sourceUrl: "user provided",
+      confidence: 60,
+    });
+  }
+
+  const bookingUrl = bookingUrls.length > 0 ? bookingUrls[0] : null;
   const booking: BookingData | null =
-    bookingUrl
+    bookingUrl !== null
       ? {
           detected: true,
-          systemName: BOOKING_HOSTS[hostOf(bookingUrl)] ?? "online booking",
-          url: bookingUrl,
+          systemName: bookingUrl === "" ? "online booking" : (BOOKING_HOSTS[hostOf(bookingUrl)] ?? "online booking"),
+          url: bookingUrl === "" ? undefined : bookingUrl,
           sourceUrl: "user provided",
-          confidence: 90,
+          confidence: bookingUrl === "" ? 70 : 90,
         }
       : null;
 

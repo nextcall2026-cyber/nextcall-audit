@@ -4,8 +4,9 @@ import "server-only";
  * Safely converts plain text to HTML and wraps it in a professional email template.
  * Prevents XSS by escaping HTML special characters.
  * Appends an unsubscribe footer for compliance.
+ * When a trackingUrl is provided, embeds a 1x1 open-tracking pixel.
  */
-export function renderEmailHtml(plainTextBody: string): string {
+export function renderEmailHtml(plainTextBody: string, trackingUrl?: string): string {
   // 1. Escape HTML special characters to prevent XSS and layout breaking
   const escapedBody = plainTextBody
     .replace(/&/g, '&amp;')
@@ -26,6 +27,7 @@ export function renderEmailHtml(plainTextBody: string): string {
         You received this email because we conducted a digital presence audit for your business. 
         If you do not wish to receive further communication, simply reply with "UNSUBSCRIBE".
       </p>
+      ${trackingUrl ? `<img src="${trackingUrl}" width="1" height="1" alt="" style="display:none" />` : ""}
     </div>
   `;
 }
