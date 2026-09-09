@@ -5,6 +5,7 @@ import { outreachPersistenceService } from "@/services/outreachPersistenceServic
 import { prospectPersistenceService } from "@/services/prospectPersistenceService";
 import { logger } from "@/lib/logger";
 
+import { getErrorMessage } from "@/lib/errors";
 export async function POST(request: NextRequest) {
   try {
     if (!env.RESEND_WEBHOOK_SECRET) {
@@ -74,8 +75,8 @@ export async function POST(request: NextRequest) {
     // 5. Acknowledge receipt
     return NextResponse.json({ success: true });
 
-  } catch (error: any) {
-    logger.error("[API /webhooks/resend] Webhook processing failed:", error.message);
+  } catch (error) {
+    logger.error("[API /webhooks/resend] Webhook processing failed:", getErrorMessage(error));
     return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
   }
 }

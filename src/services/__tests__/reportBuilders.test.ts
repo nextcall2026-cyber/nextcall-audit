@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ReportViewModel, AuditReport, ReportSignals, NextCallOpportunity } from "@/types";
+import { ReportViewModel, AuditReport, ReportSignals } from "@/types";
 import {
   deriveCategoryStatus,
   statusLabel,
@@ -11,9 +11,11 @@ import {
   buildPriorityFindings,
   buildStrengths,
   buildJourney,
-  buildRoadmap,
-  buildNextCallPrimary,
   buildNextCallCapabilities,
+  buildNextCallCta,
+  buildNextCallOpportunity,
+  buildScoreMethodology,
+  buildCoverSignals,
   sanitizeNextCallCopy,
 } from "../../components/reports/pdf/builders";
 
@@ -33,6 +35,7 @@ function makeVm(overrides: Partial<ReportViewModel> = {}): ReportViewModel {
       key: "WEBSITE" as const,
       name: "Website",
       score: 0,
+      weight: 0.25,
       findings: [
         {
           category: "WEBSITE" as const,
@@ -46,6 +49,7 @@ function makeVm(overrides: Partial<ReportViewModel> = {}): ReportViewModel {
       key: "CONTACTABILITY" as const,
       name: "Contactability",
       score: 100,
+      weight: 0.25,
       findings: [
         {
           category: "CONTACTABILITY" as const,
@@ -55,9 +59,9 @@ function makeVm(overrides: Partial<ReportViewModel> = {}): ReportViewModel {
         },
       ],
     },
-    { key: "BOOKING" as const, name: "Booking", score: 0, findings: [] },
-    { key: "SOCIAL" as const, name: "Social", score: 50, findings: [] },
-    { key: "REPUTATION" as const, name: "Reputation", score: 75, findings: [] },
+    { key: "BOOKING" as const, name: "Booking", score: 0, weight: 0.2, findings: [] },
+    { key: "SOCIAL" as const, name: "Social", score: 50, weight: 0.15, findings: [] },
+    { key: "REPUTATION" as const, name: "Reputation", score: 75, weight: 0.15, findings: [] },
   ];
 
   const signals: ReportSignals = {
@@ -68,6 +72,8 @@ function makeVm(overrides: Partial<ReportViewModel> = {}): ReportViewModel {
     reviewCount: null,
     bookingDetected: false,
     bookingSystem: null,
+    bookingUrl: null,
+    socialProfiles: [],
   };
 
   return {
@@ -78,7 +84,7 @@ function makeVm(overrides: Partial<ReportViewModel> = {}): ReportViewModel {
     auditVersion: "1.0",
     overallScore: 45,
     confidence: "HIGH",
-    categoryScores: categoryDetails.map(({ name, score }) => ({ name, score })),
+    categoryScores: categoryDetails.map(({ name, score, weight }) => ({ name, score, weight })),
     categoryDetails,
     signals,
     aiReport,
@@ -236,9 +242,11 @@ describe("buildPriorityFindings", () => {
     expect(items.every((i) => i.finding.length > 0)).toBe(true);
   });
 
-  it("uses the engine weakness title instead of a fabricated category label", () => {
+  it("uses the engine weakness title when one exists, else the status label", () => {
     const items = buildPriorityFindings(makeVm());
-    expect(items[0].title).toBe("No Website Found");
+    // Booking has no engine finding in this fixture -> status fallback.
+    expect(items[0].title).toBe("Not Detected");
+    expect(items.find((i) => i.category === "Website")?.title).toBe("No Website Found");
   });
 });
 
@@ -295,67 +303,156 @@ describe("buildJourney", () => {
 
   it("says the website is not detected only when the engine agrees", () => {
     const learnStep = buildJourney(makeVm()).steps.find((s) => s.label === "Learn");
-    expect(learnStep?.headline).toBe("Website not detected");
-  });
-});
-
-describe("buildRoadmap", () => {
-  it("maps weak categories to the roadmap with sequential numbers", () => {
-    const items = buildRoadmap(makeVm());
-    expect(items.length).toBeGreaterThan(0);
-    expect(items[0].number).toBe("01");
-    expect(items[0].title.length).toBeGreaterThan(0);
+    expect(learnStep?.headline).toBe("No public website detected");
   });
 
-  it("falls back to AI next steps when everything is strong", () => {
+  it("reports an unreachable website as 'Unable to verify', not as absent", () => {
     const base = makeVm();
     const vm = makeVm({
-      categoryDetails: base.categoryDetails.map((c) => ({ ...c, score: 95 })),
-      aiReport: { ...base.aiReport, recommendedNextSteps: ["Keep collecting reviews", "Publish hours"] },
+      categoryDetails: base.categoryDetails.map((c) =>
+        c.key === "WEBSITE"
+          ? {
+              ...c,
+              score: 45,
+              findings: [
+                {
+                  category: "WEBSITE" as const,
+                  type: "WEAKNESS" as const,
+                  title: "Unreachable Website",
+                  evidence: "The website URL could not be reached when checked.",
+                },
+              ],
+            }
+          : c
+      ),
     });
-    const items = buildRoadmap(vm);
-    expect(items[0].title).toBe("Keep collecting reviews");
+    const learnStep = buildJourney(vm).steps.find((s) => s.label === "Learn");
+    expect(learnStep?.headline).toBe("Website not reachable");
+    expect(learnStep?.status).toBe("Unable to verify");
+  });
+
+  it("marks a contact step with no phone as 'Needs attention', not 'Not detected'", () => {
+    const base = makeVm();
+    const vm = makeVm({
+      signals: { ...base.signals, phone: null },
+      categoryDetails: base.categoryDetails.map((c) =>
+        c.key === "CONTACTABILITY" ? { ...c, score: 40, findings: [] } : c
+      ),
+    });
+    const contactStep = buildJourney(vm).steps.find((s) => s.label === "Contact");
+    expect(contactStep?.headline).toBe("Contact options limited");
+    expect(contactStep?.status).toBe("Needs attention");
   });
 });
 
-describe("buildNextCall", () => {
-  const opp: NextCallOpportunity = {
-    type: "AI_MISSED_CALL_RECOVERY",
-    title: "Missed After-Hours Calls",
-    evidence: "NextCall can answer calls after business hours so inquiries are not missed.",
-  };
-
-  it("derives the problem from detected signals, not opportunity titles", () => {
-    const vm = makeVm({ nextCallOpportunities: [opp] });
-    const primary = buildNextCallPrimary(vm);
-    expect(primary.problem).toContain("important customer contact path");
-    expect(primary.problem).not.toBe("Missed After-Hours Calls");
-    expect(primary.problem).not.toMatch(/primary lead source/i);
-    expect(primary.whyItMatters).toMatch(/team is unavailable/i);
-    expect(primary.relevance).toContain("NEXT CALL relevance");
+describe("buildNextCallCapabilities (signal-driven selection)", () => {
+  it("selects only the capabilities the audit findings support", () => {
+    // phone + no website + no booking + plumbing category
+    const caps = buildNextCallCapabilities(makeVm());
+    expect(caps.map((c) => c.title)).toEqual([
+      "24/7 AI Voice Receptionist",
+      "Emergency Detection & Call Forwarding",
+      "Missed Call Recovery",
+      "AI Appointment Scheduling",
+    ]);
   });
 
-  it("derives capability cards from the capability catalog, never raw ad copy", () => {
-    const caps = buildNextCallCapabilities(makeVm({ nextCallOpportunities: [opp] }));
-    expect(caps[0].title).toBe("Missed Call Recovery");
-    expect(caps[0].detail).not.toMatch(/^NextCall can /i);
-    expect(caps[0].detail).not.toMatch(/not missed/i);
-  });
-
-  it("maps each engine opportunity type to a catalog capability", () => {
+  it("does not recommend capabilities the audit does not support", () => {
+    const base = makeVm();
     const vm = makeVm({
-      nextCallOpportunities: [
-        { type: "AI_BOOKING_ASSISTANT", title: "x", evidence: "y" },
-        { type: "AI_AFTER_HOURS", title: "x", evidence: "y" },
-        { type: "AI_LEAD_CAPTURE", title: "x", evidence: "y" },
-      ],
+      category: "Dental Care",
+      categoryDetails: base.categoryDetails.map((c) => ({
+        ...c,
+        score: 90,
+        findings: [
+          {
+            category: c.key,
+            type: "STRENGTH" as const,
+            title:
+              c.key === "WEBSITE"
+                ? "Active Website"
+                : c.key === "BOOKING"
+                  ? "Online Booking Active"
+                  : "Phone Available",
+            evidence: "Detected during this assessment.",
+          },
+        ],
+      })),
     });
     const caps = buildNextCallCapabilities(vm);
-    expect(caps.map((c) => c.title)).toEqual([
-      "Appointment Scheduling",
-      "24/7 AI Voice Receptionist",
-      "Lead Capture",
-    ]);
+    expect(caps.map((c) => c.title)).toEqual(["24/7 AI Voice Receptionist"]);
+  });
+
+  it("caps the selection at four capabilities and never exceeds it", () => {
+    const caps = buildNextCallCapabilities(makeVm());
+    expect(caps.length).toBeGreaterThan(0);
+    expect(caps.length).toBeLessThanOrEqual(4);
+  });
+
+  it("every card explains opportunity, impact and solution from grounded copy", () => {
+    const caps = buildNextCallCapabilities(makeVm());
+    expect(caps.every((c) => c.opportunity.length > 0)).toBe(true);
+    expect(caps.every((c) => c.whyItMatters.length > 0)).toBe(true);
+    expect(caps.every((c) => c.howNextCallHelps.length > 0)).toBe(true);
+    expect(caps.every((c) => !/guarantee|ensu?res? that/i.test(c.howNextCallHelps))).toBe(true);
+  });
+});
+
+describe("buildNextCallCta", () => {
+  it("addressed the reader as 'your business' — never by name — with the strongest opportunity", () => {
+    const cta = buildNextCallCta(makeVm());
+    expect(cta.overview).toContain("your business");
+    expect(cta.overview).not.toContain("JL Plumbing");
+    expect(cta.personalized).toMatch(/appears to be/i);
+    expect(cta.personalized).toMatch(/schedul/i);
+    expect(cta.howNextCallHelps).toContain("NextCall can help by");
+  });
+
+  it("never uses the business name where NextCall's function is described", () => {
+    // P1 regression: a business literally named "NextCall" must not collide
+    // with the product in CTA copy.
+    const vm = makeVm({ businessName: "NextCall" });
+    const cta = buildNextCallCta(vm);
+    const copy = [cta.overview, cta.productLine, cta.personalized, cta.howNextCallHelps].join(" ");
+    expect(copy).not.toMatch(/NextCall[^,.?!]*JL|JL[^,.?!]*NextCall/i);
+    expect(cta.overview.toLowerCase()).not.toContain("nextcall is"); // product-only noun use
+  });
+
+  it("derives benefits from the selected capabilities only", () => {
+    const cta = buildNextCallCta(makeVm());
+    expect(cta.benefits.length).toBeGreaterThan(0);
+    expect(cta.benefits.length).toBeLessThanOrEqual(3);
+    expect(cta.benefits).toContain("Answer calls 24/7");
+    expect(cta.benefits).toContain("Detect and forward urgent calls");
+  });
+
+  it("never claims unverified business outcomes", () => {
+    const cta = buildNextCallCta(makeVm());
+    const text = [cta.overview, cta.personalized, cta.howNextCallHelps].join(" ");
+    expect(text).not.toMatch(/losing|missing calls is|revenue|guarantee|primary lead source/i);
+  });
+});
+
+describe("buildCoverSignals", () => {
+  it("uses the strongest category finding as the key positive signal", () => {
+    const { positive } = buildCoverSignals(makeVm());
+    expect(positive).toContain("phone");
+  });
+
+  it("falls back to neutral language when nothing detected is strong", () => {
+    const base = makeVm();
+    const vm = makeVm({
+      signals: { ...base.signals, phone: null, website: null, preferredEmail: null },
+      categoryDetails: base.categoryDetails.map((c) => ({ ...c, score: 0, findings: [] })),
+    });
+    const { positive } = buildCoverSignals(vm);
+    expect(positive).toContain("directories");
+  });
+
+  it("surfaces the weakest category's opportunity as the biggest opportunity", () => {
+    const { opportunity } = buildCoverSignals(makeVm());
+    expect(opportunity.length).toBeGreaterThan(10);
+    expect(opportunity).toMatch(/scheduling/i);
   });
 });
 
@@ -369,5 +466,36 @@ describe("sanitizeNextCallCopy", () => {
     expect(sanitizeNextCallCopy("Calls are the primary lead source.")).toContain(
       "an important customer contact path"
     );
+  });
+});
+
+describe("buildScoreMethodology", () => {
+  it("exposes the real engine weights, summing to 100%", () => {
+    const m = buildScoreMethodology(makeVm());
+    const weights = m.items.map((i) => i.weightPercent);
+    expect(weights.reduce((a, b) => a + b, 0)).toBe(100);
+    expect(m.items.find((i) => i.name === "Website")?.weightPercent).toBe(25);
+    expect(m.items.find((i) => i.name === "Booking")?.weightPercent).toBe(20);
+    expect(m.items.every((i) => i.weightPercent > 0)).toBe(true);
+    expect(m.formula).toMatch(/^Overall = /);
+  });
+});
+
+describe("buildNextCallOpportunity", () => {
+  it("levels the opportunity from the engine's mapped opportunities and signals", () => {
+    expect(buildNextCallOpportunity(makeVm()).level).toBe("Limited");
+    const vm = makeVm({
+      nextCallOpportunities: [
+        { type: "AI_LEAD_CAPTURE" as const, title: "Lead Capture", evidence: "Limited contact options." },
+        { type: "AI_BOOKING_ASSISTANT" as const, title: "Appointment Scheduling", evidence: "No booking path." },
+      ],
+    });
+    expect(buildNextCallOpportunity(vm).level).toBe("Significant");
+    expect(buildNextCallOpportunity(vm).summary).toContain("2 opportunities");
+  });
+
+  it("never claims a specific gap when the audit mapped none", () => {
+    const sig = buildNextCallOpportunity(makeVm());
+    expect(sig.summary).toMatch(/No specific gap|24\/7 answering channel/i);
   });
 });

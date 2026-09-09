@@ -1,5 +1,5 @@
 import "server-only";
-import { Business, BusinessDiscoveryParams, ProviderConfig, DiscoveryProviderName } from "@/types";
+import { Business, BusinessDiscoveryParams, DiscoveryProviderName } from "@/types";
 import { BusinessDiscoveryProvider } from "@/providers/index";
 import { getProviderConfigs } from "@/providers/registry";
 import { QuotaService } from "@/services/quotaService";
@@ -8,7 +8,7 @@ import { SerpApiProvider } from "@/providers/serpapi";
 import { ApifyProvider } from "@/providers/apify";
 import { TomTomProvider } from "@/providers/tomtom";
 import { logger } from "@/lib/logger";
-import { RateLimitError, ProviderError } from "@/lib/errors";
+import { RateLimitError, ProviderError, getErrorMessage } from "@/lib/errors";
 import { deduplicationService } from "@/services/deduplicationService";
 
 export class DiscoveryOrchestrator {
@@ -70,16 +70,16 @@ export class DiscoveryOrchestrator {
         collectedBusinesses.push(...result.businesses);
         logger.info(`[Orchestrator] ${config.name} returned ${result.businesses.length} businesses. Total collected: ${collectedBusinesses.length}.`);
 
-      } catch (error: any) {
+      } catch (error) {
         if (error instanceof RateLimitError) {
           logger.warn(`[Orchestrator] ${config.name} rate limit exceeded. Marking provider.`);
           this.quotaService.markRateLimited(config.name);
           errors.push(`${config.name}: Rate limit exceeded`);
         } else if (error instanceof ProviderError) {
-          logger.warn(`[Orchestrator] ${config.name} failed: ${error.message}. Falling back...`);
-          errors.push(`${config.name}: ${error.message}`);
+          logger.warn(`[Orchestrator] ${config.name} failed: ${getErrorMessage(error)}. Falling back...`);
+          errors.push(`${config.name}: ${getErrorMessage(error)}`);
         } else {
-          logger.error(`[Orchestrator] Unexpected error with ${config.name}:`, error.message);
+          logger.error(`[Orchestrator] Unexpected error with ${config.name}:`, getErrorMessage(error));
           errors.push(`${config.name}: Unexpected error`);
         }
       }

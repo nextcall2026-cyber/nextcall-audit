@@ -6,6 +6,31 @@ import { ProviderError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
+/** Raw dataset-item shape returned by the Apify Google Maps actor. */
+interface ApifyRawPlace {
+  title?: string;
+  name?: string;
+  phone?: string;
+  website?: string;
+  location?: { lat?: number; lng?: number };
+  latitude?: number;
+  longitude?: number;
+  address?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
+  totalScore?: number;
+  rating?: number;
+  reviewsCount?: number;
+  reviewCount?: number;
+  categories?: string[];
+  placeId?: string;
+  id?: string;
+  url?: string;
+  permanentlyClosed?: boolean;
+}
+
 export class ApifyProvider extends BusinessDiscoveryProvider {
   readonly name: DiscoveryProviderName = "APIFY";
   readonly config: ProviderConfig = {
@@ -71,7 +96,7 @@ export class ApifyProvider extends BusinessDiscoveryProvider {
     });
   }
 
-  private normalizeBusinesses(rawBusinesses: any[]): Business[] {
+  private normalizeBusinesses(rawBusinesses: ApifyRawPlace[]): Business[] {
     if (!Array.isArray(rawBusinesses)) return [];
 
     return rawBusinesses.map((raw) => {

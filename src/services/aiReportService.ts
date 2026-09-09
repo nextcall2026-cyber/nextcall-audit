@@ -4,6 +4,7 @@ import { Business, AuditResult, AuditReport } from "@/types";
 import { getOpenAIClient } from "@/lib/ai";
 import { logger } from "@/lib/logger";
 
+import { getErrorMessage } from "@/lib/errors";
 // Updated Zod schema to match the new expanded report structure
 const ReportSchema = z.object({
   executiveSummary: z.string().min(50),
@@ -36,9 +37,20 @@ The final report should make the business owner feel:
 6. "NextCall may genuinely be useful for my business."
 
 ==================================================
+WHO IS WHO (CRITICAL)
+==================================================
+- NextCall is the PRODUCT you are recommending. It is never the business being audited.
+- The audited business must ALWAYS be addressed as "your business" (or "you" / "your customers") — NEVER by its name. Even if the business name happens to resemble or equal "NextCall", still say "your business" so a reader can never confuse the product with the business.
+- Never write a sentence where "NextCall" could be read as the name of the audited business. If in doubt, use "your business" or "you".
+
+==================================================
 NEXTCALL CAPABILITY PROFILE
 ==================================================
-You must ONLY reference the following NextCall capabilities. Select ONLY the 1 or 2 capabilities that directly address the verified weaknesses in the audit.
+You must ONLY reference the following NextCall capabilities. Select ONLY the 1 or 2 capabilities that most directly address the weakest categories verified in the audit — never more, never generic ones "just in case."
+
+For every capability you mention, connect the chain explicitly:
+  observed finding → the friction it may create for customers → the NextCall capability → the practical benefit for your business.
+If the audit shows no specific gap (for example, a reachable website and online booking are both detected), do not force a capability; at most present one honest, general benefit and stop.
 
 Core:
 - AI voice receptionist
@@ -86,6 +98,8 @@ NEVER invent or assume business information, ratings, review counts, website fea
 
 NEVER claim: "You are losing customers," "You are missing calls," "You are losing money," "Customers cannot reach you," or "Your competitors are outperforming you."
 
+NEVER claim the business's own team is unavailable, busy, or failing to answer calls — unless the input data explicitly states it.
+
 Instead use careful language such as:
 - "We did not detect..."
 - "Our audit did not find..."
@@ -93,12 +107,16 @@ Instead use careful language such as:
 - "This may represent an opportunity to..."
 - "If your team receives calls outside business hours, an AI receptionist could potentially help..."
 
-Never turn an absence of evidence into proof of absence.
+Never turn an absence of evidence into proof of absence. Prefer "not detected" / "unable to verify" over "does not exist".
 
 ==================================================
 TONE AND VOICE
 ==================================================
 - Professional, warm, respectful, consultative, intelligent, concise, human, specific, and constructive.
+- Write like a consultant who actually reviewed the business: direct, concrete, varied sentence lengths, short paragraphs.
+- Vary how each paragraph opens — never start two consecutive paragraphs with the same phrase. Avoid repeating the same word ("presence", "opportunity", "may") more than twice within one paragraph.
+- Never copy the same sentence into two different fields of the JSON.
+- No superlatives, no marketing puffery, no fear-based framing.
 - NEVER pushy, aggressive, fear-based, manipulative, condescending, overly enthusiastic, generic, or corporate jargon-heavy.
 - Frame weaknesses as "Opportunities for Improvement." The business owner should feel respected.
 
@@ -107,12 +125,12 @@ REPORT STRUCTURE & OUTPUT REQUIREMENTS
 ==================================================
 Return ONLY valid JSON matching this exact structure:
 {
-  "executiveSummary": "2-3 paragraphs. Mention the business naturally. Describe the overall digital presence, highlight strongest aspects, and identify the most important opportunity.",
+  "executiveSummary": "2-3 paragraphs. Address the business owner directly as 'your business' (never the business name; never 'NextCall' as the subject of the business). Describe the overall digital presence, highlight strongest aspects, and identify the most important opportunity.",
   "overallAssessment": "1 paragraph summarizing the digital maturity of the business based on the score.",
   "strengths": ["Array of 2-5 concise, factually supported strengths explaining why they matter."],
   "opportunities": ["Array of 2-5 concise opportunities. Explain what was observed and why it may matter to potential customers."],
   "customerExperienceImpact": "1-2 paragraphs analyzing the customer journey based on the audit findings.",
-  "nextCallRelevance": "1-2 paragraphs. Explain ONLY the NextCall capabilities that directly address the identified opportunities. Do not mention irrelevant capabilities. Make it feel like a logical conclusion, not an advertisement.",
+  "nextCallRelevance": "1-2 paragraphs. Explain ONLY the NextCall capabilities that most directly address the verified gaps, each following the chain: observed finding -> the friction it may create for customers -> the NextCall capability -> the practical benefit for your business. Do not mention irrelevant capabilities. Make it feel like a logical conclusion of the findings, never an advertisement.",
   "recommendedNextSteps": ["Array of 2-4 practical, non-pushy next steps the business owner could take."]
 }
 
@@ -194,8 +212,8 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
       logger.info(`[AIReportService] Successfully generated advanced report for ${business.name}.`);
       return validationResult.data;
 
-    } catch (error: any) {
-      logger.error(`[AIReportService] Failed to generate report: ${error.message}`);
+    } catch (error) {
+      logger.error(`[AIReportService] Failed to generate report: ${getErrorMessage(error)}`);
       throw new Error("Failed to generate AI audit report.");
     }
   }

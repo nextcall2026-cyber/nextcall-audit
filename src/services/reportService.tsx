@@ -7,7 +7,7 @@ import { AuditReportDocument } from "@/components/reports/AuditReportDocument";
 import { buildReportViewModel } from "@/services/reportViewModel";
 import { auditConsistencyIssues } from "@/components/reports/pdf/builders";
 import { logger } from "@/lib/logger";
-import { ValidationError } from "@/lib/errors";
+import { ValidationError, getErrorMessage } from "@/lib/errors";
 
 export class ReportService {
     async generatePdfBuffer(businessId: string): Promise<Buffer> {
@@ -49,8 +49,8 @@ export class ReportService {
             logger.info(`[ReportService] PDF successfully rendered for ${businessId}. Size: ${pdfBuffer.length} bytes.`);
 
             return pdfBuffer;
-        } catch (error: any) {
-            logger.error(`[ReportService] Failed to render PDF: ${error.message}`);
+        } catch (error) {
+            logger.error(`[ReportService] Failed to render PDF: ${getErrorMessage(error)}`);
             throw new Error("Failed to generate PDF document.");
         }
     }

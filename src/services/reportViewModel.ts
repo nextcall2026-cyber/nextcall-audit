@@ -42,6 +42,7 @@ export function buildReportViewModel(
   ).map(([name, data]) => ({
     name: name.charAt(0) + name.slice(1).toLowerCase(), // Format "WEBSITE" -> "Website"
     score: data.score,
+    weight: data.weight,
   }));
 
   // Group findings by category for the narrative sections
@@ -51,6 +52,7 @@ export function buildReportViewModel(
       key,
       name: c.name,
       score: c.score,
+      weight: c.weight,
       findings: audit.findings.filter((f) => f.category === key),
     };
   });
@@ -86,6 +88,11 @@ export function buildReportViewModel(
       reviewCount: business.reviewCount ?? null,
       bookingDetected: enrichment?.booking?.detected ?? false,
       bookingSystem: enrichment?.booking?.systemName ?? null,
+      bookingUrl: enrichment?.booking?.url ?? null,
+      socialProfiles: (enrichment?.socialProfiles ?? []).map((p) => ({
+        platform: p.platform,
+        url: p.url,
+      })),
     },
     aiReport,
     nextCallOpportunities: audit.opportunities,

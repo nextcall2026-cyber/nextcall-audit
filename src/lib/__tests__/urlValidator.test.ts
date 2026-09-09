@@ -9,30 +9,32 @@ vi.mock('dns', () => ({
   },
 }));
 
+const resolve4Mock = vi.mocked(dns.resolve4);
+
 describe('urlValidator (SSRF Protection)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('should allow public domains', async () => {
-    (dns.resolve4 as any).mockResolvedValue(['8.8.8.8']);
-    
+    resolve4Mock.mockResolvedValue(['8.8.8.8']);
+
     const result = await validateUrlForCrawling('https://example.com');
     expect(result.isValid).toBe(true);
     expect(result.normalizedUrl).toBe('https://example.com/');
   });
 
   it('should block domains resolving to private IPs (192.168.x.x)', async () => {
-    (dns.resolve4 as any).mockResolvedValue(['192.168.1.1']);
-    
+    resolve4Mock.mockResolvedValue(['192.168.1.1']);
+
     const result = await validateUrlForCrawling('https://internal.example.com');
     expect(result.isValid).toBe(false);
     expect(result.error).toContain('SSRF Protection');
   });
 
   it('should block domains resolving to loopback IPs (127.x.x.x)', async () => {
-    (dns.resolve4 as any).mockResolvedValue(['127.0.0.1']);
-    
+    resolve4Mock.mockResolvedValue(['127.0.0.1']);
+
     const result = await validateUrlForCrawling('https://localhost.example.com');
     expect(result.isValid).toBe(false);
     expect(result.error).toContain('SSRF Protection');
@@ -45,10 +47,10 @@ describe('urlValidator (SSRF Protection)', () => {
   });
 
   it('should block unresolvable domains', async () => {
-    const err = new Error('ENOTFOUND') as any;
+    const err = new Error('ENOTFOUND') as NodeJS.ErrnoException;
     err.code = 'ENOTFOUND';
-    (dns.resolve4 as any).mockRejectedValue(err);
-    
+    resolve4Mock.mockRejectedValue(err);
+
     const result = await validateUrlForCrawling('https://this-domain-does-not-exist.com');
     expect(result.isValid).toBe(false);
     expect(result.error).toContain('DNS resolution failed');

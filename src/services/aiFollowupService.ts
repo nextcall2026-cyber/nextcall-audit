@@ -13,6 +13,7 @@ import { logger } from "@/lib/logger";
 
 import { z } from "zod";
 
+import { getErrorMessage } from "@/lib/errors";
 const FollowUpSchema = z.object({
   subject: z.string().min(5, "Subject must be natural and descriptive"),
   body: z.string().min(50, "Body must be detailed"),
@@ -195,9 +196,9 @@ Please write the follow-up email draft for Stage ${currentStage}.
         ctaType: validationResult.data.ctaType as CTAType,
         angle: validationResult.data.angle,
       };
-    } catch (error: any) {
+    } catch (error) {
       logger.error(
-        `[AIFollowupService] Failed to generate draft: ${error.message}`
+        `[AIFollowupService] Failed to generate draft: ${getErrorMessage(error)}`
       );
 
       throw new Error(

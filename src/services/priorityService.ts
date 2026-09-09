@@ -4,6 +4,7 @@ import { logger } from "@/lib/logger";
 import { persistenceService } from "@/services/persistenceService";
 import { prospectPersistenceService } from "@/services/prospectPersistenceService";
 
+import { getErrorMessage } from "@/lib/errors";
 export class PriorityService {
   
   /**
@@ -154,8 +155,8 @@ export class PriorityService {
       await prospectPersistenceService.updatePriority(prospect.id, score, level, breakdown);
       
       logger.info(`[PriorityService] Priority recalculated for ${prospect.id}: ${score} (${level})`);
-    } catch (error: any) {
-      logger.error(`[PriorityService] Failed to recalculate priority for ${prospectId}:`, error.message);
+    } catch (error) {
+      logger.error(`[PriorityService] Failed to recalculate priority for ${prospectId}:`, getErrorMessage(error));
     }
   }
 
@@ -170,8 +171,8 @@ export class PriorityService {
       if (prospect) {
         await this.recalculatePriorityForProspect(prospect.id);
       }
-    } catch (error: any) {
-      logger.error(`[PriorityService] Failed to recalculate priority for business ${businessId}:`, error.message);
+    } catch (error) {
+      logger.error(`[PriorityService] Failed to recalculate priority for business ${businessId}:`, getErrorMessage(error));
     }
   }
 

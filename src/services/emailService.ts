@@ -2,7 +2,7 @@ import "server-only";
 import { getEmailClient } from "@/lib/email";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { ApplicationError } from "@/lib/errors";
+import { ApplicationError, getErrorMessage } from "@/lib/errors";
 import { IEmailProvider, SendEmailInput, SendEmailOutput } from "@/services/emailProvider";
 
 export class EmailService implements IEmailProvider {
@@ -43,9 +43,9 @@ export class EmailService implements IEmailProvider {
       logger.info(`[EmailService] Email accepted by Resend. Message ID: ${data?.id}`);
       return { success: true, providerMessageId: data?.id || null, error: null };
 
-    } catch (err: any) {
-      logger.error(`[EmailService] Unexpected error sending email: ${err.message}`);
-      return { success: false, providerMessageId: null, error: err.message };
+    } catch (err) {
+      logger.error(`[EmailService] Unexpected error sending email: ${getErrorMessage(err)}`);
+      return { success: false, providerMessageId: null, error: getErrorMessage(err) };
     }
   }
 }

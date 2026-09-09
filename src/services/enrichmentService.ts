@@ -1,5 +1,5 @@
 import "server-only";
-import { Business, EnrichmentData, EmailData, PhoneData, SocialProfile, BookingData, WebsiteFeatures, CrawlMetadata, WebsiteData } from "@/types";
+import { Business, EnrichmentData, EmailData, PhoneData, SocialProfile, BookingData, WebsiteFeatures, WebsiteData } from "@/types";
 import { validateUrlForCrawling } from "@/lib/urlValidator";
 import { fetchHtml } from "@/services/htmlFetcher";
 import { emailExtractor } from "@/services/emailExtractor";
@@ -12,6 +12,7 @@ import { getUrlScore, CRAWL_LIMITS } from "@/lib/crawlConfig";
 import { logger } from "@/lib/logger";
 import * as cheerio from "cheerio";
 
+import { getErrorMessage } from "@/lib/errors";
 export class EnrichmentOrchestrator {
   async enrichBusiness(business: Business): Promise<EnrichmentData> {
     const enrichment: EnrichmentData = {
@@ -45,7 +46,7 @@ export class EnrichmentOrchestrator {
       const allPhones = new Map<string, PhoneData>();
       const allSocials = new Map<string, SocialProfile>();
       let bookingData: BookingData = { detected: false };
-      let featureFlags = { hasContactForm: false, hasLiveChat: false, hasClickToCall: false, hasSecureSSL: targetUrl.startsWith('https://') };
+      const featureFlags = { hasContactForm: false, hasLiveChat: false, hasClickToCall: false, hasSecureSSL: targetUrl.startsWith('https://') };
 
       let pagesAttempted = 0;
       let pagesSuccessful = 0;
@@ -172,10 +173,10 @@ export class EnrichmentOrchestrator {
       logger.info(`[EnrichmentOrchestrator] Successfully enriched ${business.name}. Pages: ${pagesSuccessful}/${pagesAttempted}. Emails: ${emailArray.length}.`);
       return enrichment;
 
-    } catch (error: any) {
-      logger.error(`[EnrichmentOrchestrator] Unexpected error enriching ${business.name}:`, error.message);
+    } catch (error) {
+      logger.error(`[EnrichmentOrchestrator] Unexpected error enriching ${business.name}:`, getErrorMessage(error));
       enrichment.status = "FAILED";
-      enrichment.error = `Unexpected pipeline error: ${error.message}`;
+      enrichment.error = `Unexpected pipeline error: ${getErrorMessage(error)}`;
       return enrichment;
     }
   }

@@ -4,9 +4,17 @@ import { DataAPIClient, type Db } from "@datastax/astra-db-ts";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
+import { getErrorMessage } from "@/lib/errors";
 let dbClient: Db | null = null;
 
 export async function getDbClient(): Promise<Db> {
+  // TEMPORARY demo mode: run entirely in process memory (no Astra DB).
+  if (process.env.DATA_MODE === "memory") {
+    const { getMemoryDb } = await import("@/lib/memoryDb");
+    logger.warn("[DB] DATA_MODE=memory: using in-memory persistence (demo only, no data saved).");
+    return getMemoryDb() as unknown as Db;
+  }
+
   if (
     !env.ASTRA_DB_API_ENDPOINT ||
     !env.ASTRA_DB_APPLICATION_TOKEN
@@ -33,8 +41,8 @@ export async function getDbClient(): Promise<Db> {
   return dbClient;
 }
 
-export function isHibernationError(error: any): boolean {
-  const message = error?.message ?? String(error ?? "");
+export function isHibernationError(error: unknown): boolean {
+  const message = getErrorMessage(error) ?? String(error ?? "");
   return (
     message.includes("resuming from hibernation") ||
     message.toLowerCase().includes("hibernat")
@@ -51,7 +59,7 @@ export async function withDbRetry<T>(
   for (let attempt = 0; ; attempt++) {
     try {
       return await operation();
-    } catch (error: any) {
+    } catch (error) {
       if (!isHibernationError(error) || attempt >= retries) {
         throw error;
       }

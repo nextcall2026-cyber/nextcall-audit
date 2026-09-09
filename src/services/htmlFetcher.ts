@@ -2,6 +2,7 @@ import "server-only";
 import { validateUrlForCrawling } from "@/lib/urlValidator";
 import { logger } from "@/lib/logger";
 
+import { getErrorMessage } from "@/lib/errors";
 export interface FetchResult {
   success: boolean;
   html?: string;
@@ -93,11 +94,11 @@ export async function fetchHtml(initialUrl: string): Promise<FetchResult> {
     // Exceeded max redirects
     return { success: false, error: `Exceeded maximum redirects (${MAX_REDIRECTS}).` };
 
-  } catch (error: any) {
-    if (error.name === 'AbortError') {
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
       return { success: false, error: 'Request timed out after 10 seconds.' };
     }
-    logger.error(`[HtmlFetcher] Failed to fetch ${currentUrl}:`, error.message);
-    return { success: false, error: error.message };
+    logger.error(`[HtmlFetcher] Failed to fetch ${currentUrl}:`, getErrorMessage(error));
+    return { success: false, error: getErrorMessage(error) };
   }
 }

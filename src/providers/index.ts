@@ -1,6 +1,6 @@
 import "server-only";
-import { Business, BusinessDiscoveryParams, ProviderConfig, ProviderDiscoveryResult } from "@/types";
-import { ProviderError, RateLimitError } from "@/lib/errors";
+import { BusinessDiscoveryParams, ProviderConfig, ProviderDiscoveryResult } from "@/types";
+import { ProviderError, RateLimitError, getErrorMessage } from "@/lib/errors";
 
 export abstract class BusinessDiscoveryProvider {
   abstract readonly name: ProviderConfig['name'];
@@ -25,9 +25,10 @@ export abstract class BusinessDiscoveryProvider {
   protected async handleProviderCall<T>(call: () => Promise<T>): Promise<T> {
     try {
       return await call();
-    } catch (error: any) {
+    } catch (error) {
       // Detect common rate limit / quota errors
-      if (error?.response?.status === 429) {
+      const responseStatus = (error as { response?: { status?: number } } | null)?.response?.status;
+      if (responseStatus === 429) {
         throw new RateLimitError(
           `${this.name} rate limit exceeded.`,
           this.name
@@ -35,7 +36,7 @@ export abstract class BusinessDiscoveryProvider {
       }
       
       throw new ProviderError(
-        `${this.name} failed: ${error.message}`,
+        `${this.name} failed: ${getErrorMessage(error)}`,
         this.name
       );
     }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { opportunityService } from "../opportunityService";
-import { Business, EnrichmentData, EmailData } from "@/types";
+import { Business, EnrichmentData } from "@/types";
 
 function makeBusiness(overrides: Partial<Business> = {}): Business {
   return {

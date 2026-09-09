@@ -5,6 +5,7 @@ import { persistenceService } from "@/services/persistenceService";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 
+import { getErrorMessage } from "@/lib/errors";
 const DiscoverRequestSchema = z.object({
   query: z.string().min(1, "Search query is required"),
   boundingBox: z.object({
@@ -41,8 +42,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ businesses });
 
-  } catch (error: any) {
-    logger.error("[API /discover] Discovery failed:", error.message);
+  } catch (error) {
+    logger.error("[API /discover] Discovery failed:", getErrorMessage(error));
 
     return NextResponse.json(
       {

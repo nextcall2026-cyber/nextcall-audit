@@ -12,6 +12,7 @@ function sampleVm(): ReportViewModel {
       key: "WEBSITE" as const,
       name: "Website",
       score: 8,
+      weight: 0.25,
       findings: [
         { category: "WEBSITE" as const, type: "WEAKNESS" as const, title: "No Website Found", evidence: "Business does not have a detectable website." },
         { category: "WEBSITE" as const, type: "WEAKNESS" as const, title: "Missing SSL Certificate", evidence: "Website does not use secure HTTPS." },
@@ -21,6 +22,7 @@ function sampleVm(): ReportViewModel {
       key: "CONTACTABILITY" as const,
       name: "Contactability",
       score: 92,
+      weight: 0.25,
       findings: [
         { category: "CONTACTABILITY" as const, type: "STRENGTH" as const, title: "Phone Available", evidence: "Business has a public phone number." },
       ],
@@ -29,6 +31,7 @@ function sampleVm(): ReportViewModel {
       key: "BOOKING" as const,
       name: "Booking",
       score: 0,
+      weight: 0.2,
       findings: [
         { category: "BOOKING" as const, type: "WEAKNESS" as const, title: "No Online Booking", evidence: "No publicly detectable booking system was found." },
       ],
@@ -37,6 +40,7 @@ function sampleVm(): ReportViewModel {
       key: "SOCIAL" as const,
       name: "Social",
       score: 0,
+      weight: 0.15,
       findings: [
         { category: "SOCIAL" as const, type: "WEAKNESS" as const, title: "No Social Presence", evidence: "No public social media profiles detected." },
       ],
@@ -45,6 +49,7 @@ function sampleVm(): ReportViewModel {
       key: "REPUTATION" as const,
       name: "Reputation",
       score: 88,
+      weight: 0.15,
       findings: [
         { category: "REPUTATION" as const, type: "STRENGTH" as const, title: "Excellent Reputation", evidence: "High rating of 4.7 stars." },
       ],
@@ -59,7 +64,7 @@ function sampleVm(): ReportViewModel {
     auditVersion: "1.0",
     overallScore: 38,
     confidence: "HIGH",
-    categoryScores: categoryDetails.map(({ name, score }) => ({ name, score })),
+    categoryScores: categoryDetails.map(({ name, score, weight }) => ({ name, score, weight })),
     categoryDetails,
     signals: {
       phone: "+15125550123",
@@ -69,6 +74,8 @@ function sampleVm(): ReportViewModel {
       reviewCount: 182,
       bookingDetected: false,
       bookingSystem: null,
+      bookingUrl: null,
+      socialProfiles: [],
     },
     aiReport: {
       executiveSummary:
@@ -109,6 +116,17 @@ describe("AuditReportDocument render smoke test", () => {
     expect(buffer.length).toBeGreaterThan(2000);
     expect(buffer.subarray(0, 5).toString()).toBe("%PDF-");
 
+    // Exactly 7 pages: snapshot, exec summary, priorities, breakdown,
+    // journey, NextCall solution, final CTA.
+    const pdfLatin1 = buffer.toString("latin1");
+    const pageCount = pdfLatin1.match(/\/Count\s+(\d+)/);
+    expect(pageCount ? Number(pageCount[1]) : 0).toBe(7);
+
+    // Real clickable hyperlinks: NextCall CTAs + verified contact link.
+    const uris = [...pdfLatin1.matchAll(/\/URI\s*\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(uris.filter((u) => u.includes("getnextcall.com")).length).toBeGreaterThanOrEqual(2);
+    expect(uris).toContain("mailto:service@jlplumbing.com");
+
     const outDir = process.env.TEMP_PDF_DIR || "C:/Users/WALTON/AppData/Local/Temp/opencode";
     fs.mkdirSync(outDir, { recursive: true });
     const outPath = path.join(outDir, "NextCall_Audit_JLPlumbing_sample.pdf");
@@ -128,15 +146,80 @@ describe("AuditReportDocument render smoke test", () => {
         bookingDetected: true,
         bookingSystem: "PracticeSuite",
       },
-      categoryDetails: vm.categoryDetails.map((c) =>
-        c.key === "WEBSITE" || c.key === "BOOKING" || c.key === "SOCIAL" ? { ...c, score: 82 } : c
-      ),
-      categoryScores: vm.categoryDetails.map(({ name, score }) => ({ name, score: name === "Website" || name === "Booking" || name === "Social" ? 82 : score })),
+      categoryDetails: vm.categoryDetails.map((c) => {
+        if (c.key === "WEBSITE" || c.key === "BOOKING") {
+          return {
+            ...c,
+            score: 82,
+            findings: [
+              {
+                category: c.key,
+                type: "STRENGTH" as const,
+                title: c.key === "WEBSITE" ? "Active Website" : "Online Booking Active",
+                evidence: "Detected during this assessment.",
+              },
+            ],
+          };
+        }
+        return c.key === "SOCIAL" ? { ...c, score: 82 } : c;
+      }),
+      categoryScores: vm.categoryDetails.map(({ name, score, weight }) => ({
+        name,
+        score: name === "Website" || name === "Booking" || name === "Social" ? 82 : score,
+        weight,
+      })),
       aiReport: { ...vm.aiReport, nextCallRelevance: "" },
       nextCallOpportunities: [],
     };
     const buffer = await renderToBuffer(<AuditReportDocument vm={strongVm} />);
     expect(buffer.length).toBeGreaterThan(2000);
     expect(buffer.subarray(0, 5).toString()).toBe("%PDF-");
+
+    // Seven pages again, with the verified website link embedded.
+    const pdfLatin1 = buffer.toString("latin1");
+    const pageCount = pdfLatin1.match(/\/Count\s+(\d+)/);
+    expect(pageCount ? Number(pageCount[1]) : 0).toBe(7);
+    const uris = [...pdfLatin1.matchAll(/\/URI\s*\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(uris).toContain("https://summitdental.example");
+    expect(uris.filter((u) => u.includes("getnextcall.com")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("renders cleanly when the business itself is named 'NextCall'", async () => {
+    // P1 regression: the product and a same-named business must not collide.
+    const vm = sampleVm();
+    const nextCallVm: ReportViewModel = {
+      ...vm,
+      businessName: "NextCall",
+      category: "AI Software",
+      signals: {
+        ...vm.signals,
+        website: "https://getnextcall.com",
+        preferredEmail: "hello@getnextcall.com",
+      },
+      categoryDetails: vm.categoryDetails.map((c) =>
+        c.key === "WEBSITE"
+          ? {
+              ...c,
+              score: 80,
+              findings: [
+                {
+                  category: "WEBSITE" as const,
+                  type: "STRENGTH" as const,
+                  title: "Active Website",
+                  evidence: "The business website was live and reachable.",
+                },
+              ],
+            }
+          : c
+      ),
+    };
+    const buffer = await renderToBuffer(<AuditReportDocument vm={nextCallVm} />);
+    expect(buffer.length).toBeGreaterThan(2000);
+    const pdfLatin1 = buffer.toString("latin1");
+    const pageCount = pdfLatin1.match(/\/Count\s+(\d+)/);
+    expect(pageCount ? Number(pageCount[1]) : 0).toBe(7);
+    const uris = [...pdfLatin1.matchAll(/\/URI\s*\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(uris).toContain("https://getnextcall.com");
+    expect(uris).toContain("mailto:hello@getnextcall.com");
   });
 });

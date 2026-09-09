@@ -6,6 +6,24 @@ import { ProviderError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
+/** Raw GeoJSON feature shape returned by the Geoapify Places API. */
+interface GeoapifyFeature {
+  properties?: {
+    name?: string;
+    phone?: string;
+    website?: string;
+    address_line1?: string;
+    city?: string;
+    state?: string;
+    postcode?: string;
+    country?: string;
+    categories?: string;
+    place_id?: string;
+    datasource?: { url?: string; raw?: { osm_id?: string | number } };
+  };
+  geometry?: { coordinates?: number[] };
+}
+
 export class GeoapifyProvider extends BusinessDiscoveryProvider {
   readonly name: DiscoveryProviderName = "GEOAPIFY";
   readonly config: ProviderConfig = {
@@ -67,7 +85,7 @@ export class GeoapifyProvider extends BusinessDiscoveryProvider {
     });
   }
 
-  private normalizeBusinesses(features: any[]): Business[] {
+  private normalizeBusinesses(features: GeoapifyFeature[]): Business[] {
     return features.map((feature) => {
       const raw = feature.properties || {};
       const coords = feature.geometry?.coordinates || [];
@@ -89,7 +107,7 @@ export class GeoapifyProvider extends BusinessDiscoveryProvider {
         rating: undefined,
         reviewCount: undefined,
         categories: raw.categories?.split(",") || [],
-        providerIds: { geoapify: raw.place_id || raw.datasource.raw?.osm_id },
+        providerIds: { geoapify: raw.place_id || String(raw.datasource?.raw?.osm_id ?? "") },
         providerUrl: raw.datasource?.url,
         status: raw.state === "closed" ? "permanently_closed" : "active",
         sources: [this.name],

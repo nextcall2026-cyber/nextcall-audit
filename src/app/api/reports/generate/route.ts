@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { reportService } from "@/services/reportService";
 import { logger } from "@/lib/logger";
-import { ValidationError } from "@/lib/errors";
+import { ValidationError, getErrorMessage } from "@/lib/errors";
 
 const GenerateReportSchema = z.object({
   businessId: z.string().min(1, "Business ID is required"),
@@ -44,15 +44,15 @@ export async function POST(request: NextRequest) {
         "Content-Length": pdfBuffer.length.toString(),
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     logger.error(
       "[API /reports/generate] PDF generation failed:",
-      error.message
+      getErrorMessage(error)
     );
 
     if (error instanceof ValidationError) {
       return NextResponse.json(
-        { error: error.message },
+        { error: getErrorMessage(error) },
         { status: 400 }
       );
     }

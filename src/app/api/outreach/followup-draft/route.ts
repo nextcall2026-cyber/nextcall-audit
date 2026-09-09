@@ -6,7 +6,7 @@ import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
 import { aiFollowupService } from "@/services/aiFollowupService";
 import { logger } from "@/lib/logger";
-import { ValidationError } from "@/lib/errors";
+import { ValidationError, getErrorMessage } from "@/lib/errors";
 import { OutreachStage } from "@/types";
 
 const DraftRequestSchema = z.object({
@@ -51,10 +51,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ draft });
 
-  } catch (error: any) {
-    logger.error("[API /outreach/followup-draft] Generation failed:", error.message);
+  } catch (error) {
+    logger.error("[API /outreach/followup-draft] Generation failed:", getErrorMessage(error));
     if (error instanceof ValidationError) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      return NextResponse.json({ error: getErrorMessage(error) }, { status: 400 });
     }
     return NextResponse.json({ error: "Failed to generate follow-up draft." }, { status: 500 });
   }

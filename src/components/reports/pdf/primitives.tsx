@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { View, Text, Page, StyleSheet } from "@react-pdf/renderer";
+import { View, Text, Page, Link, StyleSheet } from "@react-pdf/renderer";
 import type { Style } from "@react-pdf/types";
 import { palette, spacing, page, type, font } from "./design";
 
@@ -180,9 +180,21 @@ export function Label({
   );
 }
 
-export function Card({ children, surface }: { children: React.ReactNode; surface?: boolean }) {
+export function Card({
+  children,
+  surface,
+  style,
+}: {
+  children: React.ReactNode;
+  surface?: boolean;
+  style?: Style;
+}) {
   // wrap={false}: a card must never split across a page boundary.
-  return <View style={surface ? styles.surfaceCard : styles.card} wrap={false}>{children}</View>;
+  return (
+    <View style={[surface ? styles.surfaceCard : styles.card, ...(style ? [style] : [])]} wrap={false}>
+      {children}
+    </View>
+  );
 }
 
 export function StatusBadge({
@@ -256,13 +268,105 @@ export function InfoLine({
           textTransform: "uppercase",
           letterSpacing: 0.8,
           color: accent ? palette.purple : palette.muted,
-          width: 108,
+          width: 122,
         }}
       >
         {label}
       </Text>
       <Text style={[styles.small, { flex: 1 }]}>{children}</Text>
     </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// NEXT CALL brand + link primitives
+// ---------------------------------------------------------------------------
+
+/** Reusable NEXT CALL wordmark (mark + name). */
+export function Wordmark({ compact }: { compact?: boolean }) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center" }}>
+      <View
+        style={{
+          width: compact ? 11 : 14,
+          height: compact ? 11 : 14,
+          borderRadius: 4,
+          backgroundColor: palette.purple,
+          marginRight: spacing.sm,
+        }}
+      />
+      <Text
+        style={{
+          fontFamily: font.bold,
+          fontSize: compact ? 9 : type.wordmark,
+          letterSpacing: 1.4,
+          color: palette.ink,
+        }}
+      >
+        NEXT CALL
+      </Text>
+    </View>
+  );
+}
+
+/** Clickable text link (PDF hyperlink annotation). */
+export function TextLink({
+  href,
+  children,
+  style,
+}: {
+  href: string;
+  children: React.ReactNode;
+  style?: Style;
+}) {
+  return (
+    <Link
+      src={href}
+      style={[
+        {
+          fontFamily: font.bold,
+          fontSize: type.body,
+          color: palette.purple,
+          textDecoration: "underline",
+        },
+        ...(style ? [style] : []),
+      ]}
+    >
+      {children}
+    </Link>
+  );
+}
+
+/** Prominent clickable CTA button (primary/final conversion variant). */
+export function CtaButton({
+  href,
+  label,
+  block = true,
+}: {
+  href: string;
+  label: string;
+  block?: boolean;
+}) {
+  return (
+    <Link
+      src={href}
+      style={{
+        backgroundColor: palette.purple,
+        color: palette.white,
+        fontFamily: font.bold,
+        fontSize: 11.5,
+        textTransform: "uppercase",
+        letterSpacing: 1.2,
+        textAlign: "center",
+        textDecoration: "none",
+        paddingVertical: spacing.md,
+        paddingHorizontal: spacing.xl,
+        borderRadius: 6,
+        alignSelf: block ? "stretch" : "flex-start",
+      }}
+    >
+      {label}
+    </Link>
   );
 }
 

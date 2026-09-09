@@ -1,7 +1,6 @@
 import "server-only";
 import * as cheerio from "cheerio";
 import { EmailData } from "@/types";
-import { logger } from "@/lib/logger";
 
 const PLACEHOLDER_EMAILS = [
   'example@example.com', 'test@test.com', 'user@example.com',
@@ -47,7 +46,7 @@ export class EmailExtractor {
             }
           }
         }
-      } catch (err) {
+      } catch {
         // Invalid JSON, skip
       }
     });

@@ -7,7 +7,7 @@ import { outreachSafetyService } from "@/services/outreachSafetyService";
 import { renderEmailHtml } from "@/lib/emailRenderer";
 import { getOpenTrackingUrl } from "@/lib/openTracking";
 import { logger } from "@/lib/logger";
-import { ValidationError } from "@/lib/errors";
+import { ValidationError, getErrorMessage } from "@/lib/errors";
 import { priorityService } from "@/services/priorityService";
 import { rateLimit } from "@/lib/rateLimiter";
 import { OutreachStage, CTAType, OutreachSequenceState } from "@/types";
@@ -41,8 +41,8 @@ export async function POST(request: NextRequest) {
     // 2. Pre-Send Safety Validation
     try {
       outreachSafetyService.validateSend(prospect, stage as OutreachStage);
-    } catch (e: any) {
-      return NextResponse.json({ error: e.message }, { status: 409 });
+    } catch (e) {
+      return NextResponse.json({ error: getErrorMessage(e) }, { status: 409 });
     }
 
     // 4. Create Pending Outreach Record
@@ -115,10 +115,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-  } catch (error: any) {
-    logger.error("[API /outreach/send-followup] Send failed:", error.message);
+  } catch (error) {
+    logger.error("[API /outreach/send-followup] Send failed:", getErrorMessage(error));
     if (error instanceof ValidationError) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      return NextResponse.json({ error: getErrorMessage(error) }, { status: 400 });
     }
     return NextResponse.json({ error: "Failed to process follow-up request." }, { status: 500 });
   }

@@ -3,6 +3,7 @@ import { Business, EnrichmentData } from "@/types";
 import { getBusinessesCollection, withDbRetry } from "@/lib/db";
 import { logger } from "@/lib/logger";
 
+import { getErrorMessage } from "@/lib/errors";
 export class PersistenceService {
   async saveBusinesses(businesses: Business[]): Promise<void> {
     try {
@@ -11,7 +12,7 @@ export class PersistenceService {
       let updatedCount = 0;
 
       for (const business of businesses) {
-        const filterConditions: any[] = [];
+        const filterConditions: Record<string, unknown>[] = [];
 
         if (business.phone) {
           filterConditions.push({ phone: business.phone });
@@ -36,7 +37,7 @@ export class PersistenceService {
         };
 
         if (existing) {
-          const existingDoc = existing as any;
+          const existingDoc = existing as Partial<Business> & { createdAt?: string };
 
           document.sources = Array.from(new Set([...(existingDoc.sources || []), ...(business.sources || [])]));
           document.sourceProviders = Array.from(new Set([...(existingDoc.sourceProviders || []), ...(business.sourceProviders || [])]));
@@ -71,8 +72,8 @@ export class PersistenceService {
       }
 
       logger.info(`[PersistenceService] Saved ${savedCount} new businesses, updated ${updatedCount} existing businesses.`);
-    } catch (error: any) {
-      logger.error("[PersistenceService] Failed to save businesses:", error.message);
+    } catch (error) {
+      logger.error("[PersistenceService] Failed to save businesses:", getErrorMessage(error));
     }
   }
 
@@ -127,8 +128,8 @@ async deleteBusiness(id: string): Promise<void> {
       const collection = await withDbRetry(() => getBusinessesCollection());
       await withDbRetry(() => collection.deleteOne({ id }));
       logger.info(`[PersistenceService] Deleted business ${id}.`);
-    } catch (error: any) {
-      logger.error(`[PersistenceService] Failed to delete business ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[PersistenceService] Failed to delete business ${id}:`, getErrorMessage(error));
     }
   }
 }

@@ -4,6 +4,7 @@ import { getAuditsCollection } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
+import { getErrorMessage } from "@/lib/errors";
 export class AuditPersistenceService {
   
   async saveAudit(businessId: string, audit: AuditResult): Promise<StoredAudit | null> {
@@ -21,8 +22,8 @@ export class AuditPersistenceService {
       logger.info(`[AuditPersistenceService] Saved audit ${auditRecord.id} for business ${businessId}.`);
       
       return auditRecord;
-    } catch (error: any) {
-      logger.error(`[AuditPersistenceService] Failed to save audit for ${businessId}:`, error.message);
+    } catch (error) {
+      logger.error(`[AuditPersistenceService] Failed to save audit for ${businessId}:`, getErrorMessage(error));
       return null;
     }
   }
@@ -38,8 +39,8 @@ export class AuditPersistenceService {
       }
       
       return null;
-    } catch (error: any) {
-      logger.error(`[AuditPersistenceService] Failed to get latest audit for ${businessId}:`, error.message);
+    } catch (error) {
+      logger.error(`[AuditPersistenceService] Failed to get latest audit for ${businessId}:`, getErrorMessage(error));
       return null;
     }
   }
@@ -56,8 +57,8 @@ export class AuditPersistenceService {
       );
       
       logger.info(`[AuditPersistenceService] Saved AI report for audit ${auditId}.`);
-    } catch (error: any) {
-      logger.error(`[AuditPersistenceService] Failed to save AI report for ${auditId}:`, error.message);
+    } catch (error) {
+      logger.error(`[AuditPersistenceService] Failed to save AI report for ${auditId}:`, getErrorMessage(error));
     }
   }
 
@@ -69,8 +70,8 @@ export class AuditPersistenceService {
       const collection = await getAuditsCollection();
       await collection.deleteMany({ businessId });
       logger.info(`[AuditPersistenceService] Deleted audits for business ${businessId}.`);
-    } catch (error: any) {
-      logger.error(`[AuditPersistenceService] Failed to delete audits for business ${businessId}:`, error.message);
+    } catch (error) {
+      logger.error(`[AuditPersistenceService] Failed to delete audits for business ${businessId}:`, getErrorMessage(error));
     }
   }
 }

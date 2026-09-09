@@ -9,9 +9,10 @@ import { outreachSafetyService } from "@/services/outreachSafetyService";
 import { renderEmailHtml } from "@/lib/emailRenderer";
 import { getOpenTrackingUrl } from "@/lib/openTracking";
 import { logger } from "@/lib/logger";
-import { ValidationError } from "@/lib/errors";
+import { ValidationError, getErrorMessage } from "@/lib/errors";
 import { priorityService } from "@/services/priorityService";
 import { reportService } from "@/services/reportService";
+import { buildOutreachEmail } from "@/services/outreachEmailBuilder";
 import { rateLimit } from "@/lib/rateLimiter";
 
 const SendOutreachSchema = z.object({
@@ -38,8 +39,8 @@ export async function POST(request: NextRequest) {
     // 2. Pre-Send Safety Validation (Checks suppression, state, email validity)
     try {
       outreachSafetyService.validateSend(prospect, 0); // 0 = Initial stage
-    } catch (e: any) {
-      return NextResponse.json({ error: e.message }, { status: 409 });
+    } catch (e) {
+      return NextResponse.json({ error: getErrorMessage(e) }, { status: 409 });
     }
 
     // 3. Fetch Audit/AI Report to include in email
@@ -51,7 +52,8 @@ export async function POST(request: NextRequest) {
     // 4. Fetch Business Name (Using persistenceService directly as in Phase 5 code)
     const { persistenceService } = await import("@/services/persistenceService");
     const business = await persistenceService.getBusinessById(prospect.businessId);
-    const businessName = business?.name || "your business";
+    if (!business) throw new ValidationError("Business not found.");
+    const businessName = business.name || "your business";
 
     // 4b. Generate the PDF audit report and attach it to the email
     let auditAttachment: EmailAttachment | undefined;
@@ -62,29 +64,18 @@ export async function POST(request: NextRequest) {
         content: pdfBuffer,
         contentType: "application/pdf",
       };
-    } catch (pdfError: any) {
-      logger.warn(`[API /outreach] PDF generation failed, sending without attachment: ${pdfError.message}`);
+    } catch (pdfError) {
+      logger.warn(`[API /outreach] PDF generation failed, sending without attachment: ${getErrorMessage(pdfError)}`);
     }
 
-    // 5. Generate Email Content (Plain Text)
-    const subject = `Your digital presence audit for ${businessName}`;
-    const plainTextBody = `
-      Hi ${businessName} Team,
-      
-      I was researching local service businesses in the area and took a look at your digital presence. I noticed you have some great strengths, but I also identified a few opportunities where you might be able to capture more customer inquiries.
-      
-      I put together a custom Digital Presence Audit for ${businessName} that highlights these opportunities and explains how an AI voice receptionist (like NextCall) might help you ensure no call goes unanswered, even after hours.
-      
-      Key Opportunity Identified:
-      ${storedAudit.aiReport.nextCallRelevance}
-      
-      ${auditAttachment ? "I've attached the full PDF audit report for you to review." : "Would you like me to send over the full PDF audit report?"}
-      
-      Would you be open to a quick 5-minute chat next week to discuss this?
-      
-      Best regards,
-      The NextCall Team
-    `;
+    // 5. Generate Email Content (Plain Text) — deterministic, grounded in
+    //    the same audit data the attached PDF is built from
+    const { subject, body: plainTextBody, ctaType, angle, ctaLink } = buildOutreachEmail({
+      business,
+      audit: storedAudit.audit,
+      aiReport: storedAudit.aiReport,
+      attachmentIncluded: Boolean(auditAttachment),
+    });
 
     // 7. Create Pending Outreach Record (body is filled after, once the
     //    record id is known, so the open-tracking pixel can reference it)
@@ -96,14 +87,18 @@ export async function POST(request: NextRequest) {
       "",
       'INITIAL',
       0,
-      'OFFER_AUDIT',
-      'Initial Audit'
+      ctaType,
+      angle
     );
 
     if (!pendingRecord) throw new Error("Failed to create outreach record.");
 
     // 6b. Render Safe HTML with the open-tracking pixel attached
-    const htmlBody = renderEmailHtml(plainTextBody, getOpenTrackingUrl(pendingRecord.id));
+    const htmlBody = renderEmailHtml(
+      plainTextBody,
+      getOpenTrackingUrl(pendingRecord.id),
+      ctaLink ?? undefined
+    );
     await outreachPersistenceService.updateBody(pendingRecord.id, htmlBody);
 
     // 8. ATOMIC CLAIM: Attempt to transition state from UNCONTACTED to INITIAL_SENT
@@ -142,10 +137,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-  } catch (error: any) {
-    logger.error("[API /outreach] Send failed:", error.message);
+  } catch (error) {
+    logger.error("[API /outreach] Send failed:", getErrorMessage(error));
     if (error instanceof ValidationError) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      return NextResponse.json({ error: getErrorMessage(error) }, { status: 400 });
     }
     return NextResponse.json({ error: "Failed to process outreach request." }, { status: 500 });
   }

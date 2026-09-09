@@ -4,6 +4,7 @@ import { getProspectsCollection } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
+import { getErrorMessage } from "@/lib/errors";
 export class ProspectPersistenceService {
   
   /**
@@ -69,8 +70,8 @@ export class ProspectPersistenceService {
       logger.info(`[ProspectPersistenceService] Created new prospect ${newProspect.id} for business ${businessId}.`);
       
       return newProspect;
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to create prospect for ${businessId}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to create prospect for ${businessId}:`, getErrorMessage(error));
       return null;
     }
   }
@@ -105,8 +106,8 @@ export class ProspectPersistenceService {
       const collection = await getProspectsCollection();
       const doc = await collection.findOne({ id });
       return doc as unknown as Prospect | null;
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to get prospect ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to get prospect ${id}:`, getErrorMessage(error));
       return null;
     }
   }
@@ -119,8 +120,8 @@ export class ProspectPersistenceService {
       const collection = await getProspectsCollection();
       const doc = await collection.findOne({ businessId });
       return doc as unknown as Prospect | null;
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to get prospect by business ${businessId}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to get prospect by business ${businessId}:`, getErrorMessage(error));
       return null;
     }
   }
@@ -138,8 +139,8 @@ export class ProspectPersistenceService {
       const docs = await cursor.toArray();
       
       return docs as unknown as Prospect[];
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to get all prospects:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to get all prospects:`, getErrorMessage(error));
       return [];
     }
   }
@@ -155,8 +156,8 @@ export class ProspectPersistenceService {
         { $set: { pipelineStatus: status, updatedAt: new Date().toISOString() } }
       );
       logger.info(`[ProspectPersistenceService] Updated status to ${status} for prospect ${id}.`);
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to update status for ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to update status for ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -171,8 +172,8 @@ export class ProspectPersistenceService {
         { $set: { nextFollowUpAt: date, updatedAt: new Date().toISOString() } }
       );
       logger.info(`[ProspectPersistenceService] Set next follow-up to ${date} for prospect ${id}.`);
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to set follow-up for ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to set follow-up for ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -188,8 +189,8 @@ export class ProspectPersistenceService {
         { $set: { lastContactedAt: date, updatedAt: date } }
       );
       logger.info(`[ProspectPersistenceService] Updated lastContactedAt to ${date} for prospect ${id}.`);
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to update lastContacted for ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to update lastContacted for ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -205,8 +206,8 @@ export class ProspectPersistenceService {
         { $set: { contactEmail: email, updatedAt: new Date().toISOString() } }
       );
       logger.info(`[ProspectPersistenceService] Updated contact email for prospect ${id}: ${email}`);
-    } catch (error: any) {
-logger.error(`[ProspectPersistenceService] Failed to update contact email for ${id}:`, error.message);
+    } catch (error) {
+logger.error(`[ProspectPersistenceService] Failed to update contact email for ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -231,8 +232,8 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
         }
       );
       logger.info(`[ProspectPersistenceService] Added note to prospect ${id}.`);
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to add note for ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to add note for ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -247,8 +248,8 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
         { $set: { outreachState: state, updatedAt: new Date().toISOString() } }
       );
       logger.info(`[ProspectPersistenceService] Updated outreachState to ${state} for prospect ${id}.`);
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to update outreach state for ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to update outreach state for ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -270,8 +271,8 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
         }
       );
       logger.info(`[ProspectPersistenceService] Updated suppression for ${id}: ${isSuppressed} (${reason})`);
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to update suppression for ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to update suppression for ${id}:`, getErrorMessage(error));
     }
   } 
 
@@ -293,8 +294,8 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
         { returnDocument: 'after' }
       );
       return !!result;
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to claim state for ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to claim state for ${id}:`, getErrorMessage(error));
       return false;
     }
   }
@@ -310,8 +311,8 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
         { $set: { outreachState: revertToState, updatedAt: new Date().toISOString() } }
       );
       logger.warn(`[ProspectPersistenceService] Reverted outreach state to ${revertToState} for prospect ${id} due to send failure.`);
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to revert state for ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to revert state for ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -325,7 +326,7 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
       const prospect = await collection.findOne({ id });
       if (!prospect) return;
       const isFirstView = !prospect.viewAddedAt;
-      const update: Record<string, any> = { 
+      const update: Record<string, unknown> = {
         viewedAt: now, 
         updatedAt: now,
         viewedCount: (prospect.viewedCount || 0) + 1,
@@ -337,8 +338,8 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
         { id },
         { $set: update }
       );
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to mark as viewed ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to mark as viewed ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -350,8 +351,8 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
       const collection = await getProspectsCollection();
       await collection.deleteOne({ id });
       logger.info(`[ProspectPersistenceService] Deleted prospect ${id}.`);
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to delete prospect ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to delete prospect ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -377,8 +378,8 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
         }
       );
       logger.info(`[ProspectPersistenceService] Updated priority for ${id}: ${score} (${level})`);
-    } catch (error: any) {
-      logger.error(`[ProspectPersistenceService] Failed to update priority for ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to update priority for ${id}:`, getErrorMessage(error));
     }
   }
 

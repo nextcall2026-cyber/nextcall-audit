@@ -39,14 +39,14 @@ export function normalizeUrl(rawUrl: string, baseUrl?: string): string | null {
     url.hash = '';
 
     // Normalize path (remove trailing slash, unless it's the root '/')
-    let path = url.pathname;
+    const path = url.pathname;
     if (path.length > 1 && path.endsWith('/')) {
       url.pathname = path.slice(0, -1);
     }
 
     // Return clean URL string
     return url.toString();
-  } catch (error) {
+  } catch {
     // Invalid URL
     return null;
   }

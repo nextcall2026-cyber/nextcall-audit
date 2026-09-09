@@ -7,6 +7,7 @@ import { opportunityService } from "@/services/opportunityService";
 import { PipelineStatus } from "@/types";
 import { logger } from "@/lib/logger";
 
+import { getErrorMessage } from "@/lib/errors";
 const CreateProspectSchema = z.object({
   businessId: z.string().min(1),
 });
@@ -59,10 +60,10 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ prospect });
-  } catch (error: any) {
+  } catch (error) {
     logger.error(
       "[API /prospects] Creation failed:",
-      error.message
+      getErrorMessage(error)
     );
 
     return NextResponse.json(
@@ -117,10 +118,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       prospects: enrichedProspects,
     });
-  } catch (error: any) {
+  } catch (error) {
     logger.error(
       "[API /prospects] Fetch failed:",
-      error.message
+      getErrorMessage(error)
     );
 
     return NextResponse.json(

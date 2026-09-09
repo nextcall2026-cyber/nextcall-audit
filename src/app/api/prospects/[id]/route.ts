@@ -5,7 +5,9 @@ import { prospectPersistenceService } from "@/services/prospectPersistenceServic
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
 import { logger } from "@/lib/logger";
+import { SocialProfile, CrawlMetadata } from "@/types";
 
+import { getErrorMessage } from "@/lib/errors";
 // 1. Define the Schema at the top level
 const UpdateProspectSchema = z.object({
   status: z.enum(["NEW", "READY_TO_CONTACT", "CONTACTED", "FOLLOW_UP", "QUALIFIED", "CONVERTED", "UNQUALIFIED", "CLOSED_LOST"]).optional(),
@@ -56,8 +58,8 @@ export async function GET(
           preferredEmail: snap.preferredEmail || undefined,
           emails: snap.emails?.map(a => ({ address: a, type: 'UNKNOWN' as const, sourceUrl: '', sourceType: 'VISIBLE_TEXT' as const, confidence: 0 })) || undefined,
           booking: snap.bookingDetected ? { detected: true, url: snap.bookingUrl || undefined } : undefined,
-          socialProfiles: snap.socialPlatforms?.map(p => ({ platform: p as any, url: '', sourceUrl: '', confidence: 0 })) || undefined,
-          crawlMetadata: snap.crawlQuality ? { crawlQuality: snap.crawlQuality as any, pagesAttempted: 0, pagesSuccessful: 0, pagesFailed: 0, pagesVisited: [], renderingRequired: false, crawlDurationMs: 0 } : undefined,
+          socialProfiles: snap.socialPlatforms?.map(p => ({ platform: p as SocialProfile['platform'], url: '', sourceUrl: '', confidence: 0 })) || undefined,
+          crawlMetadata: snap.crawlQuality ? { crawlQuality: snap.crawlQuality as CrawlMetadata['crawlQuality'], pagesAttempted: 0, pagesSuccessful: 0, pagesFailed: 0, pagesVisited: [], renderingRequired: false, crawlDurationMs: 0 } : undefined,
         } : undefined,
       };
     } else if (!business) {
@@ -78,8 +80,8 @@ export async function GET(
       aiReport: latestAudit?.aiReport || null,
       outreachHistory,
     });
-  } catch (error: any) {
-    logger.error("[API /prospects/[id]] Fetch failed:", error.message);
+  } catch (error) {
+    logger.error("[API /prospects/[id]] Fetch failed:", getErrorMessage(error));
     return NextResponse.json(
       { error: "Failed to fetch prospect details" },
       { status: 500 }
@@ -122,8 +124,8 @@ export async function PATCH(
     const updatedProspect = await prospectPersistenceService.getProspectById(id);
     return NextResponse.json({ prospect: updatedProspect });
 
-  } catch (error: any) {
-    logger.error("[API /prospects/[id]] Update failed:", error.message);
+  } catch (error) {
+    logger.error("[API /prospects/[id]] Update failed:", getErrorMessage(error));
     return NextResponse.json({ error: "Failed to update prospect" }, { status: 500 });
   }
 }
@@ -150,8 +152,8 @@ export async function DELETE(
     logger.info(`[API /prospects/[id]] Deleted prospect ${id} (business ${prospect.businessId}).`);
 
     return NextResponse.json({ deleted: true });
-  } catch (error: any) {
-    logger.error("[API /prospects/[id]] Delete failed:", error.message);
+  } catch (error) {
+    logger.error("[API /prospects/[id]] Delete failed:", getErrorMessage(error));
     return NextResponse.json({ error: "Failed to delete prospect" }, { status: 500 });
   }
 }

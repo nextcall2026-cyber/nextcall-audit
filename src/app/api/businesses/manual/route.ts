@@ -12,6 +12,7 @@ import { parseBusinessNotes, ParsedNotes } from "@/services/notesParser";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 
+import { getErrorMessage } from "@/lib/errors";
 const ManualBusinessSchema = z.object({
   name: z.string().min(1, "Business name is required"),
   phone: z.string().trim().optional().nullable(),
@@ -173,8 +174,8 @@ export async function POST(request: NextRequest) {
       audit: auditResult,
       aiReport,
     });
-  } catch (error: any) {
-    logger.error("[API /businesses/manual] Manual business creation failed:", error.message);
+  } catch (error) {
+    logger.error("[API /businesses/manual] Manual business creation failed:", getErrorMessage(error));
     return NextResponse.json(
       { error: "Failed to create business and run the audit." },
       { status: 500 }

@@ -6,6 +6,20 @@ import { ProviderError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
+/** Raw search-result shape returned by the TomTom Search API. */
+interface TomTomRawResult {
+  id?: string | number;
+  poi?: { name?: string; phone?: string; url?: string; categories?: string[] };
+  position?: { lat?: number; lon?: number };
+  address?: {
+    freeformAddress?: string;
+    municipality?: string;
+    countrySubdivision?: string;
+    postalCode?: string;
+    country?: string;
+  };
+}
+
 export class TomTomProvider extends BusinessDiscoveryProvider {
   readonly name: DiscoveryProviderName = "TOMTOM";
   readonly config: ProviderConfig = {
@@ -72,7 +86,7 @@ export class TomTomProvider extends BusinessDiscoveryProvider {
     });
   }
 
-  private normalizeBusinesses(rawBusinesses: any[]): Business[] {
+  private normalizeBusinesses(rawBusinesses: TomTomRawResult[]): Business[] {
     return rawBusinesses.map((raw) => {
       const business: Business = {
         id: randomUUID(),

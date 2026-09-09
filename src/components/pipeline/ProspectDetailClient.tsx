@@ -12,6 +12,7 @@ import { normalizeExternalUrl, isValidExternalUrl } from "@/lib/externalUrl";
 import Link from "next/link";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 
+import { getErrorMessage } from "@/lib/errors";
 interface ProspectDetailData {
     prospect: Prospect;
     business: Business;
@@ -41,52 +42,66 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
     const [isRunningAudit, setIsRunningAudit] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
 
-    const fetchDetails = async () => {
+    // Pure fetch without setState, so the mount effect can call it without
+    // triggering react-hooks/set-state-in-effect (state updates happen in
+    // promise continuations instead).
+    const loadDetails = useCallback(async (): Promise<ProspectDetailData> => {
+        const res = await fetch(`/api/prospects/${prospectId}`);
+        if (!res.ok) {
+            const errData = await res.json().catch(() => ({ error: "Unknown error" }));
+            throw new Error(errData.error || `Request failed (${res.status})`);
+        }
+        return (await res.json()) as ProspectDetailData;
+    }, [prospectId]);
+
+    // Used by event handlers to refresh after a mutation
+    const fetchDetails = useCallback(async () => {
         setIsLoading(true);
         setActionError(null);
         try {
-            const res = await fetch(`/api/prospects/${prospectId}`);
-            if (!res.ok) {
-                const errData = await res.json().catch(() => ({ error: "Unknown error" }));
-                throw new Error(errData.error || `Request failed (${res.status})`);
-            }
-            const result = await res.json();
+            const result = await loadDetails();
             setData(result);
             setEmailInput(result.prospect.contactEmail || "");
-        } catch (err: any) {
-            logger.error("[ProspectDetail] Fetch failed:", err.message);
-            setActionError(err.message);
+        } catch (err) {
+            logger.error("[ProspectDetail] Fetch failed:", getErrorMessage(err));
+            setActionError(getErrorMessage(err));
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [loadDetails]);
 
     useEffect(() => {
-        fetchDetails();
-    }, [prospectId]);
-
-    // Mark as viewed when the page loads (only once)
-    const markAsViewed = useCallback(async () => {
-        if (!data?.prospect) return;
-        if (data.prospect.viewAddedAt) return; // Already viewed
-        try {
-            await fetch(`/api/prospects/${prospectId}`, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({}),
+        loadDetails()
+            .then((result) => {
+                setData(result);
+                setEmailInput(result.prospect.contactEmail || "");
+            })
+            .catch((err: unknown) => {
+                logger.error("[ProspectDetail] Fetch failed:", getErrorMessage(err));
+                setActionError(getErrorMessage(err));
+            })
+            .finally(() => {
+                setIsLoading(false);
             });
-            setData(prev => prev ? {
-                ...prev,
-                prospect: { ...prev.prospect, viewAddedAt: new Date().toISOString() }
-            } : null);
-        } catch { /* ignore */ }
-    }, [data?.prospect, prospectId]);
+    }, [loadDetails]);
 
+    // Mark as viewed once, after the details first load. The PATCH returns
+    // the updated prospect, so no separate local state patch is needed.
     useEffect(() => {
-        if (data && !isLoading) {
-            markAsViewed();
-        }
-    }, [data, isLoading, markAsViewed]);
+        if (!data || isLoading) return;
+        if (data.prospect.viewAddedAt) return; // Already viewed
+        fetch(`/api/prospects/${prospectId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((updated: { prospect: Prospect } | null) => {
+                if (!updated?.prospect) return;
+                setData(prev => prev ? { ...prev, prospect: updated.prospect } : prev);
+            })
+            .catch(() => { /* ignore */ });
+    }, [data, isLoading, prospectId]);
 
     const handleStatusChange = async (newStatus: PipelineStatus) => {
         if (!data) return;
@@ -97,8 +112,8 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                 body: JSON.stringify({ status: newStatus }),
             });
             setData({ ...data, prospect: { ...data.prospect, pipelineStatus: newStatus } });
-        } catch (err: any) {
-            logger.error("[ProspectDetail] Status update failed:", err.message);
+        } catch (err) {
+            logger.error("[ProspectDetail] Status update failed:", getErrorMessage(err));
         }
     };
 
@@ -114,8 +129,8 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             const updatedProspect = (await res.json()).prospect;
             setData({ ...data, prospect: updatedProspect });
             setNoteText("");
-        } catch (err: any) {
-            logger.error("[ProspectDetail] Add note failed:", err.message);
+        } catch (err) {
+            logger.error("[ProspectDetail] Add note failed:", getErrorMessage(err));
         }
     };
 
@@ -131,8 +146,8 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                 body: JSON.stringify({ isSuppressed: true, suppressionReason: reason || "MANUAL_DNC" }),
             });
             await fetchDetails();
-        } catch (err: any) {
-            logger.error("[ProspectDetail] Suppress failed:", err.message);
+        } catch (err) {
+            logger.error("[ProspectDetail] Suppress failed:", getErrorMessage(err));
         }
     };
 
@@ -151,9 +166,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             }
             const data = await res.json();
             setDraft(data.draft);
-        } catch (err: any) {
-            setActionError(err.message);
-            logger.error("[ProspectDetail] Draft generation failed:", err.message);
+        } catch (err) {
+            setActionError(getErrorMessage(err));
+            logger.error("[ProspectDetail] Draft generation failed:", getErrorMessage(err));
         } finally {
             setIsGeneratingDraft(false);
         }
@@ -184,9 +199,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
 
             setDraft(null);
             await fetchDetails();
-        } catch (err: any) {
-            setActionError(err.message);
-            logger.error("[ProspectDetail] Send follow-up failed:", err.message);
+        } catch (err) {
+            setActionError(getErrorMessage(err));
+            logger.error("[ProspectDetail] Send follow-up failed:", getErrorMessage(err));
         } finally {
             setIsSendingFollowUp(false);
         }
@@ -218,9 +233,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                 throw new Error(errData.error || "Failed to send initial email");
             }
             await fetchDetails();
-        } catch (err: any) {
-            setActionError(err.message);
-            logger.error("[ProspectDetail] Send initial failed:", err.message);
+        } catch (err) {
+            setActionError(getErrorMessage(err));
+            logger.error("[ProspectDetail] Send initial failed:", getErrorMessage(err));
         } finally {
             setIsSendingInitial(false);
         }
@@ -247,9 +262,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             }
             const updatedProspect = (await res.json()).prospect;
             setData({ ...data, prospect: updatedProspect });
-        } catch (err: any) {
-            setActionError(err.message);
-            logger.error("[ProspectDetail] Save email failed:", err.message);
+        } catch (err) {
+            setActionError(getErrorMessage(err));
+            logger.error("[ProspectDetail] Save email failed:", getErrorMessage(err));
         } finally {
             setIsSavingEmail(false);
         }
@@ -274,9 +289,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                 throw new Error("AI report generation failed. Check the AI provider configuration.");
             }
             await fetchDetails();
-        } catch (err: any) {
-            setActionError(err.message);
-            logger.error("[ProspectDetail] Run audit failed:", err.message);
+        } catch (err) {
+            setActionError(getErrorMessage(err));
+            logger.error("[ProspectDetail] Run audit failed:", getErrorMessage(err));
         } finally {
             setIsRunningAudit(false);
         }

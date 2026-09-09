@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 import { priorityService } from "@/services/priorityService";
 import { rateLimit } from "@/lib/rateLimiter";
 
+import { getErrorMessage } from "@/lib/errors";
 const AuditRequestSchema = z.object({
   businessId: z.string().min(1, "Business ID is required"),
   business: z.any().optional(),
@@ -111,9 +112,9 @@ export async function POST(request: NextRequest) {
 
         // Update the local object to return to the client
         latestAuditRecord.aiReport = aiReport;
-      } catch (aiError: any) {
+      } catch (aiError) {
         logger.error(
-          `[API /audit] AI Report generation failed for ${businessId}: ${aiError.message}`
+          `[API /audit] AI Report generation failed for ${businessId}: ${getErrorMessage(aiError)}`
         );
 
         // Don't throw here, so the user still gets
@@ -129,10 +130,10 @@ export async function POST(request: NextRequest) {
       audit: latestAuditRecord?.audit,
       aiReport: latestAuditRecord?.aiReport,
     });
-  } catch (error: any) {
+  } catch (error) {
     logger.error(
       "[API /audit] Audit failed:",
-      error.message
+      getErrorMessage(error)
     );
 
     return NextResponse.json(

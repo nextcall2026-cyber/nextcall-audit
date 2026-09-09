@@ -305,9 +305,9 @@ export function buildPriorityFindings(vm: ReportViewModel): FindingCardData[] {
   const weak = vm.categoryDetails
     .filter((c) => deriveCategoryStatus(c.score) !== "STRONG" && deriveCategoryStatus(c.score) !== "GOOD")
     .slice()
-    .sort((a, b) => a.score - b.score);
+    .sort((a, b) => a.score - b.score || CATEGORY_PRIORITY[a.key] - CATEGORY_PRIORITY[b.key]);
 
-  const targets = weak.length >= 2 ? weak : vm.categoryDetails.slice().sort((a, b) => a.score - b.score);
+  const targets = weak.length >= 2 ? weak : vm.categoryDetails.slice().sort((a, b) => a.score - b.score || CATEGORY_PRIORITY[a.key] - CATEGORY_PRIORITY[b.key]);
 
   return targets.slice(0, 4).map((c) => {
     const ctx = categoryContext(c);
@@ -408,7 +408,7 @@ export function buildJourney(vm: ReportViewModel): {
       ? websiteWeakness.title === "No Website Found"
         ? {
             label: "Learn",
-            headline: "Website not detected",
+            headline: "No public website detected",
             detail:
               "No publicly detectable website was identified during this assessment.",
             positive: false,
@@ -416,10 +416,10 @@ export function buildJourney(vm: ReportViewModel): {
           }
         : {
             label: "Learn",
-            headline: "Website unreachable",
+            headline: "Website not reachable",
             detail: websiteWeakness.evidence,
             positive: false,
-            status: "Not detected",
+            status: "Unable to verify",
           }
       : s.websiteUrlDetected
         ? {
@@ -428,14 +428,14 @@ export function buildJourney(vm: ReportViewModel): {
             detail:
               "A website URL was identified, though full accessibility could not be verified during this assessment.",
             positive: false,
-            status: "Not detected",
+            status: "Unable to verify",
           }
         : {
             label: "Learn",
-            headline: "Presence partially verified",
+            headline: "Accessibility unverified",
             detail: "Website accessibility could not be fully verified during this assessment.",
             positive: false,
-            status: "Not detected",
+            status: "Unable to verify",
           };
 
   // CONTACT — grounded in the same phone finding as the rest of the report
@@ -461,7 +461,7 @@ export function buildJourney(vm: ReportViewModel): {
             ? "No public phone number was detected, though an email address was identified as an alternative contact option."
             : "No public phone number or email address was detected during this assessment.",
           positive: false,
-          status: "Not detected",
+          status: "Needs attention",
         };
 
   // SCHEDULE
@@ -511,167 +511,432 @@ export function buildJourney(vm: ReportViewModel): {
 }
 
 // ---------------------------------------------------------------------------
-// Recommended priorities (roadmap — mapped to detected weaknesses)
-// ---------------------------------------------------------------------------
-
-const ROADMAP_TITLES: Record<string, { title: string; detail: string }> = {
-  WEBSITE: {
-    title: "Establish a basic digital home",
-    detail:
-      "Create a simple, service-focused website so customers can verify services and learn how to get in touch.",
-  },
-  CONTACTABILITY: {
-    title: "Improve contactability",
-    detail:
-      "Add clear contact channels and publish business hours so customers know how and when to reach you.",
-  },
-  BOOKING: {
-    title: "Make scheduling easier",
-    detail:
-      "Offer an online scheduling path so customers can move from inquiry to appointment without waiting on hours of operation.",
-  },
-  SOCIAL: {
-    title: "Strengthen local visibility",
-    detail:
-      "Build profiles on the platforms customers use most so the business is discoverable beyond phone directories.",
-  },
-  REPUTATION: {
-    title: "Build public reputation signals",
-    detail:
-      "Encourage satisfied customers to leave public reviews so new customers can see social proof.",
-  },
-};
-
-export interface RoadmapItem {
-  number: string;
-  title: string;
-  detail: string;
-}
-
-export function buildRoadmap(vm: ReportViewModel): RoadmapItem[] {
-  const weak = vm.categoryDetails
-    .map((c) => ({ ...c, status: deriveCategoryStatus(c.score) }))
-    .filter((c) => c.status !== "STRONG" && c.status !== "GOOD")
-    .sort((a, b) => a.score - b.score);
-
-  const items = weak.slice(0, 4).map((c, i) => {
-    const template = ROADMAP_TITLES[c.key] || {
-      title: `Improve ${c.name.toLowerCase()}`,
-      detail:
-        CATEGORY_CONTEXT[c.key]?.opportunity ||
-        `Address the findings in ${c.name.toLowerCase()}.`,
-    };
-    return {
-      number: String(i + 1).padStart(2, "0"),
-      title: template.title,
-      detail: template.detail,
-    };
-  });
-
-  // Fallback: if everything is already strong, use the AI grounded next steps.
-  if (items.length === 0 && vm.aiReport.recommendedNextSteps.length > 0) {
-    return vm.aiReport.recommendedNextSteps.slice(0, 4).map((step, i) => ({
-      number: String(i + 1).padStart(2, "0"),
-      title: step,
-      detail:
-        "Maintain the strengths identified in this assessment while reviewing the remaining findings.",
-    }));
-  }
-
-  return items;
-}
-
-// ---------------------------------------------------------------------------
 // NEXT CALL — solution tied to real audit opportunities
 // ---------------------------------------------------------------------------
 
-export interface NextCallPrimary {
-  problem: string;
-  whyItMatters: string;
-  relevance: string;
-}
-
 /**
- * PROBLEM card — evidence-based, never claims "primary lead source"
- * (the audit proves a phone number exists and other options are limited,
- * not that calls are the primary lead source).
+ * Relevant capabilities are selected deterministically from the same
+ * audit signals the rest of the report is built on. A capability is only
+ * shown when the audit supports its relevance — never because it exists
+ * in the product. Each card explains the connection:
+ *   FINDING → CUSTOMER IMPACT → NEXTCALL SOLUTION
  */
-export function buildNextCallPrimary(vm: ReportViewModel): NextCallPrimary {
-  const s = deriveAuditSignals(vm);
+export type NextCallCapabilityKey =
+  | "RECEPTIONIST_24_7"
+  | "APPOINTMENT_SCHEDULING"
+  | "MISSED_CALL_RECOVERY"
+  | "LEAD_CAPTURE"
+  | "AUTOMATED_FOLLOW_UP"
+  | "REVIEW_FOLLOW_UP"
+  | "SOCIAL_DM"
+  | "EMERGENCY_FORWARDING";
 
-  let problem: string;
-  if (!s.phoneDetected) {
-    problem =
-      "Limited publicly detectable contact channels were identified, so prospective customers may have few ways to reach the business.";
-  } else if (!s.bookingDetected) {
-    problem =
-      "With limited digital contact options detected, phone communication appears to be an important customer contact path.";
-  } else {
-    problem =
-      "Phone communication is an important customer contact path, and consistent handling of inbound calls helps capture inquiries when the team is unavailable.";
-  }
-
-  return {
-    problem,
-    whyItMatters:
-      "Customers who reach out at times when the team is unavailable may experience a delayed response or friction in getting their inquiry addressed.",
-    relevance: sanitizeNextCallCopy(vm.aiReport.nextCallRelevance),
-  };
+export interface NextCallCapabilityCard {
+  key: NextCallCapabilityKey;
+  title: string;
+  opportunity: string; // THE OPPORTUNITY — what was detected for this business
+  whyItMatters: string; // WHY IT MATTERS — customer/business friction this may create
+  howNextCallHelps: string; // HOW NEXTCALL HELPS — the relevant capability
 }
 
-/** Primary capability cards only — every entry is an actual NEXT CALL
- *  product capability, keyed by the engine's opportunity type. */
 const CAPABILITY_CATALOG: Record<
-  string,
-  { title: string; detail: string }
+  NextCallCapabilityKey,
+  Omit<NextCallCapabilityCard, "key">
 > = {
-  AI_BOOKING_ASSISTANT: {
-    title: "Appointment Scheduling",
-    detail:
-      "Helps move callers from inquiry toward a scheduled appointment during phone conversations.",
-  },
-  AI_AFTER_HOURS: {
+  RECEPTIONIST_24_7: {
     title: "24/7 AI Voice Receptionist",
-    detail:
-      "Answers inbound calls and handles initial customer conversations when the team is unavailable.",
+    opportunity:
+      "Phone communication is an important contact path, and callers may reach out at times when the team is unavailable.",
+    whyItMatters:
+      "Inquiries that arrive after hours or while the team is busy may wait before a customer hears back, delaying the path from inquiry to service.",
+    howNextCallHelps:
+      "NextCall answers inbound calls 24/7 with a custom greeting, handles common questions, detects urgent situations, and captures the caller's name, phone and email.",
   },
-  AI_LEAD_CAPTURE: {
-    title: "Lead Capture",
-    detail:
-      "Captures caller information and documents inquiry details so they can be followed up.",
+  APPOINTMENT_SCHEDULING: {
+    title: "AI Appointment Scheduling",
+    opportunity:
+      "No publicly detectable online booking path was identified for this business.",
+    whyItMatters:
+      "Customers who prefer to schedule ahead may need to call during business hours and wait for availability before moving forward.",
+    howNextCallHelps:
+      "NextCall can handle appointment conversations over the phone, check availability against Google Calendar, and confirm bookings so jobs make it onto the calendar.",
   },
-  AI_MISSED_CALL_RECOVERY: {
+  MISSED_CALL_RECOVERY: {
     title: "Missed Call Recovery",
-    detail:
-      "Helps identify inbound calls that were not answered and supports reconnecting with callers.",
+    opportunity:
+      "Phone appears to be an important contact path, with limited digital alternatives detected.",
+    whyItMatters:
+      "If a call is not answered, the inquiry may be lost entirely because there is no other clear way for the customer to follow up.",
+    howNextCallHelps:
+      "NextCall helps identify calls that were not answered and can re-engage callers automatically so no inquiry quietly slips away.",
+  },
+  LEAD_CAPTURE: {
+    title: "Lead Capture",
+    opportunity:
+      "Limited digital contact channels were detected, so inquiries may arrive through unstructured paths.",
+    whyItMatters:
+      "Without structured capture, inquiry details may be incomplete or depend on manual notes before a customer can move forward.",
+    howNextCallHelps:
+      "NextCall records caller information and inquiry details during phone conversations and can alert the team to new leads.",
+  },
+  AUTOMATED_FOLLOW_UP: {
+    title: "Automated Customer Follow-Up",
+    opportunity:
+      "Because no online scheduling path was detected, customers may need multiple touchpoints before committing.",
+    whyItMatters:
+      "Customers who do not hear back promptly may move on to another provider without the team knowing.",
+    howNextCallHelps:
+      "NextCall can send follow-up messages after calls and keep conversation history organized so the team can pick up where the customer left off.",
+  },
+  REVIEW_FOLLOW_UP: {
+    title: "Review Follow-Up",
+    opportunity:
+      "A public reputation exists, but review volume is limited, so prospective customers have less public social proof to rely on.",
+    whyItMatters:
+      "Fewer visible reviews can make it harder for prospective customers to trust the business during their research.",
+    howNextCallHelps:
+      "NextCall can send automated review requests after completed jobs and help the team manage public replies.",
+  },
+  SOCIAL_DM: {
+    title: "Facebook / Instagram DM Automation",
+    opportunity:
+      "Social profiles were detected, and customers may send inquiries through direct messages.",
+    whyItMatters:
+      "Messages that arrive while the team is busy or after hours may sit unanswered until someone checks the inbox.",
+    howNextCallHelps:
+      "NextCall can automate responses to Facebook and Instagram direct messages so inquiries receive a timely reply.",
+  },
+  EMERGENCY_FORWARDING: {
+    title: "Emergency Detection & Call Forwarding",
+    opportunity:
+      "This business category commonly involves time-sensitive requests, so urgent calls are plausible.",
+    whyItMatters:
+      "If an urgent request cannot reach the right person quickly, customers may seek another provider.",
+    howNextCallHelps:
+      "NextCall detects emergency language during calls and can forward or alert the team so urgent requests are addressed right away.",
   },
 };
 
-export interface CapabilityCardData {
-  title: string;
-  detail: string;
+const EMERGENCY_CATEGORY_KEYWORDS = [
+  "plumb",
+  "hvac",
+  "heat",
+  "cool",
+  "electrical",
+  "electrician",
+  "water",
+  "sewer",
+  "drain",
+  "roof",
+  "gas",
+  "furnace",
+  "air conditioning",
+  "ac repair",
+];
+
+function isEmergencyCategory(category: string): boolean {
+  const value = category?.toLowerCase() ?? "";
+  return EMERGENCY_CATEGORY_KEYWORDS.some((k) => value.includes(k));
 }
 
+/**
+ * Selects the 2–4 capabilities that genuinely address this business's
+ * detected opportunities.
+ *
+ * Selection follows the audit, worst first: the weakest categories drive
+ * which capabilities are considered (a gap in booking points to scheduling
+ * help, an unreachable website with phone reliance points to call capture).
+ * Card order follows a conversion-first ladder — the steady-availability
+ * card leads, urgency and recovery follow, then scheduling — while the
+ * set itself stays grounded in what the audit actually found.
+ */
 export function buildNextCallCapabilities(
   vm: ReportViewModel
-): CapabilityCardData[] {
-  const opps = vm.nextCallOpportunities || [];
-  const capabilities: CapabilityCardData[] = [];
+): NextCallCapabilityCard[] {
+  const s = deriveAuditSignals(vm);
+  const selected: NextCallCapabilityKey[] = [];
+  const add = (key: NextCallCapabilityKey) => {
+    if (!selected.includes(key)) selected.push(key);
+  };
 
-  for (const o of opps.slice(0, 3)) {
-    const capability = CAPABILITY_CATALOG[o.type];
-    if (capability) capabilities.push(capability);
+  // Specific, category-driven candidates — worst category first.
+  const weakestFirst = vm.categoryDetails
+    .slice()
+    .sort((a, b) => a.score - b.score);
+  for (const cat of weakestFirst) {
+    const status = deriveCategoryStatus(cat.score);
+    if (status === "STRONG" || status === "GOOD") continue;
+
+    if (cat.key === "BOOKING" && !s.bookingDetected) {
+      add("APPOINTMENT_SCHEDULING");
+    } else if (cat.key === "WEBSITE" && !s.websiteReachable && s.phoneDetected) {
+      add("MISSED_CALL_RECOVERY");
+    } else if (cat.key === "WEBSITE" && !s.websiteReachable && !s.phoneDetected) {
+      add("LEAD_CAPTURE");
+    } else if (cat.key === "CONTACTABILITY" && (s.phoneDetected ? !s.emailDetected : true)) {
+      add("LEAD_CAPTURE");
+    }
   }
 
-  if (capabilities.length === 0) {
-    capabilities.push({
-      title: "AI Voice Receptionist",
-      detail:
-        "Answers inbound calls and captures customer information to support a consistent response.",
+  // Base cards grounded in the strongest signals (fill remaining slots).
+  if (!s.bookingDetected) add("APPOINTMENT_SCHEDULING");
+  if (s.phoneDetected) add("RECEPTIONIST_24_7");
+  else if (!s.emailDetected || !s.websiteReachable) add("LEAD_CAPTURE");
+
+  // Optional cards, most specific to the audit first.
+  if (s.phoneDetected && !s.websiteReachable) add("MISSED_CALL_RECOVERY");
+  if (isEmergencyCategory(vm.category) && s.phoneDetected) {
+    add("EMERGENCY_FORWARDING");
+  }
+  if (s.phoneDetected && !s.bookingDetected) add("AUTOMATED_FOLLOW_UP");
+  if (s.socialDetected && !s.bookingDetected) add("SOCIAL_DM");
+  if (s.reputationDetected && s.reviewCount !== null && s.reviewCount < 30) {
+    add("REVIEW_FOLLOW_UP");
+  }
+
+  const LADDER: NextCallCapabilityKey[] = [
+    "RECEPTIONIST_24_7",
+    "EMERGENCY_FORWARDING",
+    "MISSED_CALL_RECOVERY",
+    "APPOINTMENT_SCHEDULING",
+    "AUTOMATED_FOLLOW_UP",
+    "LEAD_CAPTURE",
+    "SOCIAL_DM",
+    "REVIEW_FOLLOW_UP",
+  ];
+  const ordered = selected
+    .slice()
+    .sort((a, b) => LADDER.indexOf(a) - LADDER.indexOf(b));
+
+  const cards = ordered
+    .slice(0, 4)
+    .map((key) => ({ key, ...CAPABILITY_CATALOG[key] }));
+
+  if (cards.length === 0) {
+    // Fully strong business: one honest, relevant capability remains.
+    cards.push({
+      key: "RECEPTIONIST_24_7",
+      ...CAPABILITY_CATALOG.RECEPTIONIST_24_7,
+      opportunity:
+        "Consistent handling of inbound calls supports capturing inquiries when the team is unavailable.",
     });
   }
 
-  return capabilities.slice(0, 3);
+  return cards;
+}
+
+// ---------------------------------------------------------------------------
+// NEXT CALL — final conversion CTA (personalized from verified findings)
+// ---------------------------------------------------------------------------
+
+export interface NextCallCtaContent {
+  overview: string;
+  productLine: string;
+  personalized: string;
+  howNextCallHelps: string;
+  benefits: string[];
+}
+
+const CTA_BENEFIT_BY_KEY: Record<NextCallCapabilityKey, string> = {
+  RECEPTIONIST_24_7: "Answer calls 24/7",
+  APPOINTMENT_SCHEDULING: "Book appointments over the phone",
+  MISSED_CALL_RECOVERY: "Recover missed calls automatically",
+  LEAD_CAPTURE: "Capture lead details",
+  AUTOMATED_FOLLOW_UP: "Follow up automatically",
+  REVIEW_FOLLOW_UP: "Request reviews after completed jobs",
+  SOCIAL_DM: "Automate Facebook & Instagram DMs",
+  EMERGENCY_FORWARDING: "Detect and forward urgent calls",
+};
+
+const CTA_HELP_BY_KEY: Record<NextCallCapabilityKey, string> = {
+  RECEPTIONIST_24_7: "answering calls 24/7",
+  APPOINTMENT_SCHEDULING: "booking appointments over the phone",
+  MISSED_CALL_RECOVERY: "reconnecting with callers who were not answered",
+  LEAD_CAPTURE: "capturing caller information",
+  AUTOMATED_FOLLOW_UP: "following up automatically",
+  REVIEW_FOLLOW_UP: "requesting reviews after completed jobs",
+  SOCIAL_DM: "automating social media inquiries",
+  EMERGENCY_FORWARDING: "detecting and forwarding urgent requests",
+};
+
+/**
+ * Personalization is derived from the audit's strongest opportunity —
+ * never a fixed paragraph. Wording stays hedged ("appears to be",
+ * "may", "could") because the audit proves presence/absence of signals,
+ * not business outcomes.
+ *
+ * Copy addresses the reader as "your business" / "you" — the business
+ * name is never used to describe what NextCall does, so a business
+ * named "NextCall" can never be confused with the product.
+ */
+export function buildNextCallCta(vm: ReportViewModel): NextCallCtaContent {
+  const s = deriveAuditSignals(vm);
+  const capabilities = buildNextCallCapabilities(vm);
+  const keys = capabilities.map((c) => c.key);
+
+  let opportunityPhrase: string;
+  if (!s.bookingDetected) {
+    opportunityPhrase =
+      "making it easier for customers to move from inquiry to a scheduled appointment with your business";
+  } else if (!s.websiteReachable) {
+    opportunityPhrase =
+      "giving customers a dependable place to learn about, and reach, your business";
+  } else if (!s.socialDetected) {
+    opportunityPhrase =
+      "expanding the channels where customers can discover your business";
+  } else if (s.phoneDetected) {
+    opportunityPhrase =
+      "handling customer inquiries consistently when the team is busy or unavailable";
+  } else {
+    opportunityPhrase =
+      "strengthening the public contact and scheduling paths for your business";
+  }
+
+  const benefits = keys
+    .map((k) => CTA_BENEFIT_BY_KEY[k])
+    .filter(Boolean)
+    .slice(0, 3);
+
+  const helpParts = keys
+    .map((k) => CTA_HELP_BY_KEY[k])
+    .filter(Boolean)
+    .slice(0, 3);
+
+  return {
+    overview:
+      "This assessment points to several ways to make it easier for customers to reach you, learn about your business, and move from inquiry to service.",
+    productLine:
+      "NextCall provides an AI receptionist and customer communication system designed for local service businesses.",
+    personalized: `Your strongest opportunity appears to be ${opportunityPhrase}.`,
+    howNextCallHelps: `NextCall can help by ${helpParts.join(", ")}.`,
+    benefits,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// NEXT CALL — opportunity framing (kept distinct from the presence score)
+// ---------------------------------------------------------------------------
+
+export interface NextCallOpportunitySignal {
+  level: "Significant" | "Moderate" | "Limited";
+  summary: string;
+}
+
+/**
+ * P16: The Digital Presence Score measures what the audit could verify.
+ * This is a separate signal: how well a NextCall-style answering
+ * solution fits what the audit found, derived from the engine's own
+ * opportunity mapping — never from assumed business outcomes.
+ */
+export function buildNextCallOpportunity(
+  vm: ReportViewModel
+): NextCallOpportunitySignal {
+  const s = deriveAuditSignals(vm);
+  const count = vm.nextCallOpportunities?.length ?? 0;
+  const titles = (vm.nextCallOpportunities ?? [])
+    .map((o) => o.title)
+    .slice(0, 2)
+    .join(", ");
+
+  const strongFit = count > 0 && s.phoneDetected && !s.bookingDetected;
+  const level: NextCallOpportunitySignal["level"] = strongFit
+    ? "Significant"
+    : count >= 1
+      ? "Moderate"
+      : "Limited";
+
+  let summary: string;
+  if (count > 0) {
+    summary = `The audit mapped ${count} ${
+      count === 1 ? "opportunity" : "opportunities"
+    } where an AI receptionist could help (${
+      titles || "see the capabilities below"
+    }).`;
+  } else {
+    summary =
+      "No specific gap mapped by this assessment — NextCall could still provide a consistent 24/7 answering channel.";
+  }
+  return { level, summary };
+}
+
+// ---------------------------------------------------------------------------
+// Score methodology (P2) — the real weights from the audit engine
+// ---------------------------------------------------------------------------
+
+export interface ScoreMethodologyItem {
+  name: string;
+  weightPercent: number;
+}
+
+export interface ScoreMethodology {
+  items: ScoreMethodologyItem[];
+  formula: string;
+}
+
+export function buildScoreMethodology(vm: ReportViewModel): ScoreMethodology {
+  const items = vm.categoryDetails.map((c) => ({
+    name: c.name,
+    weightPercent: Math.round(c.weight * 100),
+  }));
+  const formula = `Overall = ${items
+    .map((i) => `${i.name} × ${i.weightPercent}%`)
+    .join(" + ")}`;
+  return { items, formula };
+}
+
+// ---------------------------------------------------------------------------
+// Business snapshot (cover) — key positive signal + biggest opportunity
+// ---------------------------------------------------------------------------
+
+// Fixed tie-break rank so tied categories resolve deterministically to the
+// most business-critical gap (booking > contact > website > social > reputation).
+const CATEGORY_PRIORITY: Record<AuditCategoryName, number> = {
+  BOOKING: 0,
+  CONTACTABILITY: 1,
+  WEBSITE: 2,
+  SOCIAL: 3,
+  REPUTATION: 4,
+};
+
+export function buildCoverSignals(vm: ReportViewModel): {
+  positive: string;
+  opportunity: string;
+} {
+  const sorted = vm.categoryDetails.slice().sort((a, b) => {
+    const byScore = b.score - a.score;
+    if (byScore !== 0) return byScore;
+    // When categories tie, treat the more business-critical one as the
+    // bigger opportunity (e.g. booking over social at 0/100 each).
+    return CATEGORY_PRIORITY[b.key] - CATEGORY_PRIORITY[a.key];
+  });
+  const strongest = sorted[0];
+  const weakest = sorted[sorted.length - 1];
+
+  let positive: string;
+  const strongestStatus = deriveCategoryStatus(strongest.score);
+  if (strongestStatus === "STRONG" || strongestStatus === "GOOD") {
+    const strength = strongest.findings.find((f) => f.type === "STRENGTH");
+    positive =
+      strength?.evidence ||
+      `A working, publicly detectable presence was identified in ${strongest.name.toLowerCase()}.`;
+  } else {
+    const s = deriveAuditSignals(vm);
+    if (s.phoneDetected) {
+      positive =
+        "A public phone number was detected, giving customers a direct contact path.";
+    } else if (s.websiteUrlDetected) {
+      positive = "A website presence was identified during this assessment.";
+    } else if (s.emailDetected) {
+      positive = "An email address was identified as a contact option.";
+    } else {
+      positive =
+        "The business was identified in local business directories during this assessment.";
+    }
+  }
+
+  const opportunity = categoryContext(weakest).opportunity;
+
+  return { positive, opportunity };
 }
 
 /**

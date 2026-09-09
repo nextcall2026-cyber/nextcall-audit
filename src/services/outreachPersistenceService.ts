@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
 
+import { getErrorMessage } from "@/lib/errors";
 export class OutreachPersistenceService {
   /**
    * Checks if a business has already been successfully contacted.
@@ -21,10 +22,10 @@ export class OutreachPersistenceService {
       });
 
       return !!existing;
-    } catch (error: any) {
+    } catch (error) {
       logger.error(
         `[OutreachPersistenceService] Error checking contact status for ${businessId}:`,
-        error.message
+        getErrorMessage(error)
       );
 
       // Fail open, but log the error
@@ -75,8 +76,8 @@ async createPendingOutreach(
       logger.info(`[OutreachPersistenceService] Created PENDING outreach (Stage ${sequenceStage}) record ${newRecord.id}.`);
       
       return newRecord;
-    } catch (error: any) {
-      logger.error(`[OutreachPersistenceService] Failed to create pending outreach:`, error.message);
+    } catch (error) {
+      logger.error(`[OutreachPersistenceService] Failed to create pending outreach:`, getErrorMessage(error));
       return null;
     }
   }
@@ -108,8 +109,8 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
         // Update Prospect's lastContactedAt
         await prospectPersistenceService.updateLastContacted(record.prospectId, sentAt);
       }
-    } catch (error: any) {
-      logger.error(`[OutreachPersistenceService] Failed to mark outreach ${id} as SENT:`, error.message);
+    } catch (error) {
+      logger.error(`[OutreachPersistenceService] Failed to mark outreach ${id} as SENT:`, getErrorMessage(error));
     }
   }
 
@@ -137,10 +138,10 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
       logger.warn(
         `[OutreachPersistenceService] Marked outreach ${id} as FAILED: ${errorMessage}`
       );
-    } catch (error: any) {
+    } catch (error) {
       logger.error(
         `[OutreachPersistenceService] Failed to mark outreach ${id} as FAILED:`,
-        error.message
+        getErrorMessage(error)
       );
     }
   }
@@ -158,10 +159,10 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
       const docs = await cursor.toArray();
 
       return docs as unknown as OutreachRecord[];
-    } catch (error: any) {
+    } catch (error) {
       logger.error(
         `[OutreachPersistenceService] Failed to get outreach history for ${prospectId}:`,
-        error.message
+        getErrorMessage(error)
       );
 
       return [];
@@ -181,8 +182,8 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
       const collection = await getOutreachCollection();
       await collection.deleteMany({ prospectId });
       logger.info(`[OutreachPersistenceService] Deleted outreach for prospect ${prospectId}.`);
-    } catch (error: any) {
-      logger.error(`[OutreachPersistenceService] Failed to delete outreach for prospect ${prospectId}:`, error.message);
+    } catch (error) {
+      logger.error(`[OutreachPersistenceService] Failed to delete outreach for prospect ${prospectId}:`, getErrorMessage(error));
     }
   }
 
@@ -194,8 +195,8 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
     try {
       const collection = await getOutreachCollection();
       await collection.updateOne({ id, status: "PENDING" }, { $set: { body } });
-    } catch (error: any) {
-      logger.error(`[OutreachPersistenceService] Failed to update body for outreach ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[OutreachPersistenceService] Failed to update body for outreach ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -213,8 +214,8 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
       if (result.modifiedCount > 0) {
         logger.info(`[OutreachPersistenceService] Recorded open for outreach ${id}.`);
       }
-    } catch (error: any) {
-      logger.error(`[OutreachPersistenceService] Failed to record open for outreach ${id}:`, error.message);
+    } catch (error) {
+      logger.error(`[OutreachPersistenceService] Failed to record open for outreach ${id}:`, getErrorMessage(error));
     }
   }
 
@@ -232,8 +233,8 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
       });
       const docs = await cursor.toArray();
       return docs as unknown as OutreachRecord[];
-    } catch (error: any) {
-      logger.error("[OutreachPersistenceService] Failed to fetch opened outreach records:", error.message);
+    } catch (error) {
+      logger.error("[OutreachPersistenceService] Failed to fetch opened outreach records:", getErrorMessage(error));
       return [];
     }
   }
@@ -259,7 +260,7 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
         return null; 
       }
 
-      const updateData: any = {
+      const updateData: Record<string, unknown> = {
         deliveryStatus: status,
         updatedAt: new Date().toISOString()
       };
@@ -279,8 +280,8 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
       
       // Return prospectId so we can suppress them if it bounced
       return record.prospectId;
-    } catch (error: any) {
-      logger.error(`[OutreachPersistenceService] Failed to update delivery status:`, error.message);
+    } catch (error) {
+      logger.error(`[OutreachPersistenceService] Failed to update delivery status:`, getErrorMessage(error));
       return null;
     }
   }

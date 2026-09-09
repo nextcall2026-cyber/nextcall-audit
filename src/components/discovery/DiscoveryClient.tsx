@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Download, Plus, Check, MapPin, Search } from "lucide-react";
 import { logger } from "@/lib/logger";
 
+import { getErrorMessage } from "@/lib/errors";
 const MapView = dynamic(() => import("./MapView"), {
     ssr: false,
     loading: () => <p>Loading map...</p>,
@@ -55,31 +56,30 @@ const RADIUS_OPTIONS = [
 
 const SESSION_KEY = "nextcall_discovery_state";
 
-function boundingBoxFromCenter(center: { lat: number; lng: number }, radiusMeters: number): BoundingBox {
-    const latDelta = radiusMeters / 111000;
-    const lngDelta = radiusMeters / (111000 * Math.cos((center.lat * Math.PI) / 180));
-    return {
-        minLat: center.lat - latDelta,
-        maxLat: center.lat + latDelta,
-        minLng: center.lng - lngDelta,
-        maxLng: center.lng + lngDelta,
-    };
+interface DiscoverySessionState {
+    selectedNiche?: string;
+    customNiche?: string;
+    bounds?: BoundingBox | null;
+    selectedCenter?: { lat: number; lng: number } | null;
+    radiusMeters?: number;
+    businesses?: BusinessWithAudit[];
+    pipelineStatuses?: Record<string, boolean>;
 }
 
-function saveToSession(data: any) {
+function saveToSession(data: DiscoverySessionState) {
     try {
         const serialized = JSON.stringify(data);
         sessionStorage.setItem(SESSION_KEY, serialized);
-    } catch (e) {
+    } catch {
         // sessionStorage may be full or unavailable
     }
 }
 
-function loadFromSession(): any | null {
+function loadFromSession(): DiscoverySessionState | null {
     try {
         const raw = sessionStorage.getItem(SESSION_KEY);
         if (!raw) return null;
-        return JSON.parse(raw);
+        return JSON.parse(raw) as DiscoverySessionState;
     } catch {
         return null;
     }
@@ -111,16 +111,17 @@ export default function DiscoveryClient() {
         const saved = loadFromSession();
         if (!saved) return;
 
-        if (typeof saved.selectedNiche === "string") setSelectedNiche(saved.selectedNiche);
-        if (typeof saved.customNiche === "string") setCustomNiche(saved.customNiche);
-        if (saved.bounds) setBounds(saved.bounds);
-        if (saved.selectedCenter) setSelectedCenter(saved.selectedCenter);
-        if (typeof saved.radiusMeters === "number") setRadiusMeters(saved.radiusMeters);
-        if (Array.isArray(saved.businesses)) setBusinesses(saved.businesses);
-        if (saved.pipelineStatuses && typeof saved.pipelineStatuses === "object") {
-            setPipelineStatuses(saved.pipelineStatuses);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        queueMicrotask(() => {
+            if (typeof saved.selectedNiche === "string") setSelectedNiche(saved.selectedNiche);
+            if (typeof saved.customNiche === "string") setCustomNiche(saved.customNiche);
+            if (saved.bounds) setBounds(saved.bounds);
+            if (saved.selectedCenter) setSelectedCenter(saved.selectedCenter);
+            if (typeof saved.radiusMeters === "number") setRadiusMeters(saved.radiusMeters);
+            if (Array.isArray(saved.businesses)) setBusinesses(saved.businesses);
+            if (saved.pipelineStatuses && typeof saved.pipelineStatuses === "object") {
+                setPipelineStatuses(saved.pipelineStatuses);
+            }
+        });
     }, []);
 
     // Persist state to sessionStorage on changes
@@ -174,9 +175,9 @@ export default function DiscoveryClient() {
             const data = await response.json();
             setBusinesses(data.businesses);
             setPipelineStatuses({});
-        } catch (err: any) {
-            setError(err.message);
-            logger.error("[DiscoveryClient] Search failed:", err.message);
+        } catch (err) {
+            setError(getErrorMessage(err));
+            logger.error("[DiscoveryClient] Search failed:", getErrorMessage(err));
         } finally {
             setIsLoading(false);
         }
@@ -197,9 +198,9 @@ export default function DiscoveryClient() {
             }
             const data = await response.json();
             setBusinesses(prev => prev.map(b => b.id === business.id ? data.business : b));
-        } catch (err: any) {
-            setError(err.message);
-            logger.error("[DiscoveryClient] Enrichment failed:", err.message);
+        } catch (err) {
+            setError(getErrorMessage(err));
+            logger.error("[DiscoveryClient] Enrichment failed:", getErrorMessage(err));
         } finally {
             setEnrichingId(null);
         }
@@ -219,8 +220,8 @@ export default function DiscoveryClient() {
             setBusinesses(prev => prev.map(b =>
                 b.id === business.id ? { ...b, audit: data.audit, aiReport: data.aiReport } : b
             ));
-        } catch (err: any) {
-            logger.error("[DiscoveryClient] Audit failed:", err.message);
+        } catch (err) {
+            logger.error("[DiscoveryClient] Audit failed:", getErrorMessage(err));
         } finally {
             setAuditingId(null);
         }
@@ -253,9 +254,9 @@ export default function DiscoveryClient() {
             window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
 
-        } catch (err: any) {
-            setError(`PDF Download failed: ${err.message}`);
-            logger.error("[DiscoveryClient] PDF Download failed:", err.message);
+        } catch (err) {
+            setError(`PDF Download failed: ${getErrorMessage(err)}`);
+            logger.error("[DiscoveryClient] PDF Download failed:", getErrorMessage(err));
         } finally {
             setDownloadingPdfId(null);
         }
@@ -279,9 +280,9 @@ export default function DiscoveryClient() {
 
             setPipelineStatuses(prev => ({ ...prev, [businessId]: true }));
 
-        } catch (err: any) {
-            setError(`Pipeline Error: ${err.message}`);
-            logger.error("[DiscoveryClient] Add to pipeline failed:", err.message);
+        } catch (err) {
+            setError(`Pipeline Error: ${getErrorMessage(err)}`);
+            logger.error("[DiscoveryClient] Add to pipeline failed:", getErrorMessage(err));
         } finally {
             setAddingToPipelineId(null);
         }

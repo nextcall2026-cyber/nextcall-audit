@@ -3,13 +3,17 @@
  *
  * Premium, personalized, information-first report document.
  *
- * Architecture: six narrative pages composed from reusable sections.
+ * Architecture: seven narrative pages composed from reusable sections.
  * All content is derived dynamically from the audit ReportViewModel —
  * no business data is hardcoded. Page composition is explicit so each
  * section keeps page-internal integrity: keep-together blocks
  * (wrap={false}) and never-open-page breaks guarantee that no section
- * strands alone on a page and priorities/roadmaps are never split.
- * The fixed footer always numbers correctly ("01 / 06" style).
+ * strands alone on a page.
+ *
+ * Journey: AUDIT (P1–P5) → TRUST → PERSONALIZED NEXTCALL SOLUTION (P6)
+ * → TRIAL CONVERSION (P7). The fixed footer always numbers correctly
+ * ("01 / 07" style) and every link side uses the verified NextCall URLs
+ * from src/lib/nextCallConfig.ts.
  */
 
 import React from "react";
@@ -20,57 +24,60 @@ import { ReportPage } from "./pdf/primitives";
 import {
   CoverSection,
   ExecutiveSummarySection,
+  PriorityOpportunitiesSection,
   BreakdownSection,
   JourneySection,
-  NextCallSection,
-  RoadmapSection,
-  NextCallCtaSection,
+  NextCallSolutionSection,
+  NextCallFinalCtaSection,
   MethodologySection,
 } from "./pdf/Sections";
-import { buildOverviewStatement } from "./pdf/builders";
 
 interface AuditReportDocumentProps {
   vm: ReportViewModel;
 }
 
 export const AuditReportDocument = ({ vm }: AuditReportDocumentProps) => {
-  const statement = buildOverviewStatement(vm);
-
   return (
     <Document
       author="NEXT CALL"
+      creator="NEXT CALL"
       subject={`Digital Presence Audit — ${vm.businessName}`}
       title={`Digital Presence Audit — ${vm.businessName}`}
+      keywords={`Digital Presence Audit, NextCall, ${vm.businessName}`}
     >
       {/* PAGE 1 — Business snapshot / premium cover */}
       <ReportPage businessName={vm.businessName}>
-        <CoverSection vm={vm} statement={statement} />
+        <CoverSection vm={vm} />
       </ReportPage>
 
-      {/* PAGE 2 — What we found + strengths + priority opportunities */}
+      {/* PAGE 2 — Executive summary: what's working / opportunity / impact */}
       <ReportPage businessName={vm.businessName} breakNow>
         <ExecutiveSummarySection vm={vm} />
       </ReportPage>
 
-      {/* PAGE 3 — Digital presence breakdown */}
+      {/* PAGE 3 — Priority opportunities with recommended actions */}
+      <ReportPage businessName={vm.businessName} breakNow>
+        <PriorityOpportunitiesSection vm={vm} />
+      </ReportPage>
+
+      {/* PAGE 4 — Digital presence breakdown */}
       <ReportPage businessName={vm.businessName} breakNow>
         <BreakdownSection vm={vm} />
       </ReportPage>
 
-      {/* PAGE 4 — Customer journey */}
+      {/* PAGE 5 — Customer journey */}
       <ReportPage businessName={vm.businessName} breakNow>
         <JourneySection vm={vm} />
       </ReportPage>
 
-      {/* PAGE 5 — One opportunity worth addressing (NEXT CALL) */}
+      {/* PAGE 6 — Personalized NextCall solution + soft CTA */}
       <ReportPage businessName={vm.businessName} breakNow>
-        <NextCallSection vm={vm} />
+        <NextCallSolutionSection vm={vm} />
       </ReportPage>
 
-      {/* PAGE 6 — Prioritized roadmap + CTA + methodology */}
+      {/* PAGE 7 — Personalized final CTA + trial + methodology */}
       <ReportPage businessName={vm.businessName} breakNow>
-        <RoadmapSection vm={vm} />
-        <NextCallCtaSection vm={vm} />
+        <NextCallFinalCtaSection vm={vm} />
         <MethodologySection vm={vm} />
       </ReportPage>
     </Document>

@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger";
 import { priorityService } from "@/services/priorityService";
 import { rateLimit } from "@/lib/rateLimiter";
 
+import { getErrorMessage } from "@/lib/errors";
 const EnrichRequestSchema = z.object({
   businessId: z.string().min(1, "Business ID is required"),
   business: z.any().optional(),
@@ -80,13 +81,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       business: updatedBusiness,
     });
-  } catch (error: any) {
+  } catch (error) {
     logger.error(
       "[API /enrich] Enrichment failed:",
-      error.message
+      getErrorMessage(error)
     );
 
-    const message = error?.message ?? "";
+    const message = getErrorMessage(error) ?? "";
     const isDbUnavailable =
       message.includes("resuming from hibernation") ||
       message.toLowerCase().includes("hibernat") ||

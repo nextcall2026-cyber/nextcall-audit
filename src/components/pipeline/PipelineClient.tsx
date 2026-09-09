@@ -8,6 +8,7 @@ import { Trash2 } from "lucide-react";
 import { logger } from "@/lib/logger";
 import Link from "next/link";
 
+import { getErrorMessage } from "@/lib/errors";
 interface EnrichedProspect extends Prospect {
     businessName: string;
     auditScore: number | null;
@@ -40,8 +41,8 @@ export default function PipelineClient() {
 
                 const data = await response.json();
                 setProspects(data.prospects);
-            } catch (err: any) {
-                logger.error("[PipelineClient] Fetch failed:", err.message);
+            } catch (err) {
+                logger.error("[PipelineClient] Fetch failed:", getErrorMessage(err));
             } finally {
                 setIsLoading(false);
             }
@@ -78,7 +79,7 @@ export default function PipelineClient() {
             }
             setProspects(prev => prev.filter(p => p.id !== prospect.id));
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = err instanceof Error ? getErrorMessage(err) : String(err);
             logger.error("[PipelineClient] Delete failed:", message);
             window.alert(`Delete failed: ${message}`);
         }

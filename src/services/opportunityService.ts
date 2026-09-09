@@ -26,11 +26,11 @@ export class OpportunityService {
     totalScore += commGapScore;
 
     // --- 3. Digital Presence (max 25) ---
-    const digitalPresenceScore = this.evaluateDigitalPresence(business, breakdown, reasons, evidence, unknownFactors);
+    const digitalPresenceScore = this.evaluateDigitalPresence(business, breakdown, reasons, evidence);
     totalScore += digitalPresenceScore;
 
     // --- 4. Phone-Dependent Business Fit (max 20) ---
-    const phoneDependencyScore = this.evaluatePhoneDependency(business, breakdown, reasons, evidence, unknownFactors);
+    const phoneDependencyScore = this.evaluatePhoneDependency(business, breakdown, reasons, evidence);
     totalScore += phoneDependencyScore;
 
     // --- 5. Customer Engagement (max 15) ---
@@ -153,7 +153,7 @@ export class OpportunityService {
 
   private evaluateDigitalPresence(
     business: Business, breakdown: OpportunityBreakdownItem[], reasons: string[],
-    evidence: string[], unknownFactors: string[]
+    evidence: string[]
   ): number {
     let score = 0;
 
@@ -199,7 +199,7 @@ export class OpportunityService {
 
   private evaluatePhoneDependency(
     business: Business, breakdown: OpportunityBreakdownItem[], reasons: string[],
-    evidence: string[], unknownFactors: string[]
+    evidence: string[]
   ): number {
     let score = 0;
 

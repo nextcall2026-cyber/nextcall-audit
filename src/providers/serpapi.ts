@@ -6,6 +6,21 @@ import { ProviderError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
+/** Raw Google local-results record shape returned by SerpApi. */
+interface SerpApiRawPlace {
+  title?: string;
+  phone?: string;
+  website?: string;
+  latitude?: number;
+  longitude?: number;
+  address?: string;
+  rating?: number;
+  reviews?: number;
+  type?: string;
+  place_id?: string;
+  fid?: string;
+}
+
 export class SerpApiProvider extends BusinessDiscoveryProvider {
   readonly name: DiscoveryProviderName = "SERPAPI";
   readonly config: ProviderConfig = {
@@ -66,7 +81,7 @@ export class SerpApiProvider extends BusinessDiscoveryProvider {
     });
   }
 
-  private normalizeBusinesses(rawBusinesses: any[]): Business[] {
+  private normalizeBusinesses(rawBusinesses: SerpApiRawPlace[]): Business[] {
     return rawBusinesses.map((raw) => {
       const business: Business = {
         id: randomUUID(),

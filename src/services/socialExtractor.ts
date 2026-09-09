@@ -61,5 +61,5 @@ export function extractSocialProfiles(html: string, sourceUrl: string): SocialPr
     }
   });
 
-  return Array.from(profiles.entries()).map(([_, data]) => data);
+  return Array.from(profiles.entries()).map(([, data]) => data);
 }

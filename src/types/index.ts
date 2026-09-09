@@ -219,12 +219,16 @@ export interface AuditReport {
 export interface ReportCategoryScore {
   name: string;
   score: number;
+  /** Weight used in the overall score, 0–1 (e.g. 0.25). Exposed so the report can show its methodology. */
+  weight: number;
 }
 
 export interface ReportCategoryDetail {
   key: AuditCategoryName;
   name: string;
   score: number;
+  /** Weight used in the overall score, 0–1 (e.g. 0.25). */
+  weight: number;
   findings: AuditFinding[];
 }
 
@@ -236,6 +240,8 @@ export interface ReportSignals {
   reviewCount: number | null;
   bookingDetected: boolean;
   bookingSystem: string | null;
+  bookingUrl: string | null;
+  socialProfiles: { platform: string; url: string }[];
 }
 
 export interface ReportViewModel {

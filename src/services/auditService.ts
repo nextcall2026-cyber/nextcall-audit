@@ -39,32 +39,32 @@ export class AuditEngine {
 
     if (!enrichment?.website) {
       breakdown.push({ rule: "No website data", pointsAwarded: 0, maxPoints: 100, reason: "Enrichment data missing or failed." });
-      findings.push({ category: 'WEBSITE', type: 'WEAKNESS', title: 'No Website Found', evidence: 'Business does not have a detectable website.' });
+      findings.push({ category: 'WEBSITE', type: 'WEAKNESS', title: 'No Website Found', evidence: 'No publicly detectable website was identified in the sources checked.' });
       return { score: 0, breakdown, findings };
     }
 
     if (enrichment.website.isReachable) {
       score += 40;
       breakdown.push({ rule: "Website Reachable", pointsAwarded: 40, maxPoints: 40, reason: "Website URL was accessible." });
-      findings.push({ category: 'WEBSITE', type: 'STRENGTH', title: 'Active Website', evidence: 'Business website is live and reachable.' });
+      findings.push({ category: 'WEBSITE', type: 'STRENGTH', title: 'Active Website', evidence: 'The business website was live and reachable at the time of the assessment.' });
     } else {
       breakdown.push({ rule: "Website Reachable", pointsAwarded: 0, maxPoints: 40, reason: "Website URL was not accessible." });
-      findings.push({ category: 'WEBSITE', type: 'WEAKNESS', title: 'Unreachable Website', evidence: 'Website URL returned an error or timed out.' });
+      findings.push({ category: 'WEBSITE', type: 'WEAKNESS', title: 'Unreachable Website', evidence: 'The website URL could not be reached when checked (error or timeout).' });
     }
 
     if (enrichment.features?.hasSecureSSL === true) {
       score += 20;
       breakdown.push({ rule: "SSL Certificate", pointsAwarded: 20, maxPoints: 20, reason: "HTTPS detected." });
     } else {
-      breakdown.push({ rule: "SSL Certificate", pointsAwarded: 0, maxPoints: 20, reason: "No HTTPS detected." });
-      findings.push({ category: 'WEBSITE', type: 'WEAKNESS', title: 'Missing SSL Certificate', evidence: 'Website does not use secure HTTPS.' });
+      breakdown.push({ rule: "SSL Certificate", pointsAwarded: 0, maxPoints: 20, reason: "HTTPS was not confirmed." });
+      findings.push({ category: 'WEBSITE', type: 'WEAKNESS', title: 'Missing SSL Certificate', evidence: 'HTTPS encryption was not confirmed on the website.' });
     }
 
     if (enrichment.website.title && enrichment.website.description) {
       score += 20;
       breakdown.push({ rule: "Meta Tags", pointsAwarded: 20, maxPoints: 20, reason: "Title and description tags found." });
     } else {
-      breakdown.push({ rule: "Meta Tags", pointsAwarded: 0, maxPoints: 20, reason: "Missing SEO meta tags." });
+      breakdown.push({ rule: "Meta Tags", pointsAwarded: 0, maxPoints: 20, reason: "Title and description tags were not detected in the page markup." });
     }
 
     if (enrichment.website.requiresJsRendering) {
@@ -88,9 +88,9 @@ export class AuditEngine {
     if (business.phone || enrichment?.phones?.length) {
       score += 30;
       breakdown.push({ rule: "Phone Number", pointsAwarded: 30, maxPoints: 30, reason: "Public phone number found." });
-      findings.push({ category: 'CONTACTABILITY', type: 'STRENGTH', title: 'Phone Available', evidence: 'Business has a public phone number.' });
+      findings.push({ category: 'CONTACTABILITY', type: 'STRENGTH', title: 'Phone Available', evidence: 'A public phone number was detected.' });
     } else {
-      breakdown.push({ rule: "Phone Number", pointsAwarded: 0, maxPoints: 30, reason: "No phone number found." });
+      breakdown.push({ rule: "Phone Number", pointsAwarded: 0, maxPoints: 30, reason: "No public phone number found." });
     }
 
     if (enrichment?.emails?.length) {
@@ -104,18 +104,18 @@ export class AuditEngine {
       score += 30;
       breakdown.push({ rule: "Contact Form", pointsAwarded: 30, maxPoints: 30, reason: "Contact form detected." });
     } else {
-      breakdown.push({ rule: "Contact Form", pointsAwarded: 0, maxPoints: 30, reason: "No contact form detected or unknown." });
+      breakdown.push({ rule: "Contact Form", pointsAwarded: 0, maxPoints: 30, reason: "A contact form was not detected in the sources checked." });
     }
 
     if (enrichment?.features?.hasClickToCall === true) {
       score += 20;
       breakdown.push({ rule: "Click-to-Call", pointsAwarded: 20, maxPoints: 20, reason: "Click-to-call link detected." });
     } else {
-      breakdown.push({ rule: "Click-to-Call", pointsAwarded: 0, maxPoints: 20, reason: "No click-to-call link detected or unknown." });
+      breakdown.push({ rule: "Click-to-Call", pointsAwarded: 0, maxPoints: 20, reason: "A click-to-call link was not detected in the sources checked." });
     }
 
     if (score < 50) {
-      findings.push({ category: 'CONTACTABILITY', type: 'WEAKNESS', title: 'Limited Contact Options', evidence: 'Business lacks multiple standard contact methods.' });
+      findings.push({ category: 'CONTACTABILITY', type: 'WEAKNESS', title: 'Limited Contact Options', evidence: 'Multiple standard contact methods were not detected.' });
     }
 
     return { score: Math.min(score, 100), breakdown, findings };
@@ -132,8 +132,8 @@ export class AuditEngine {
       breakdown.push({ rule: "Booking System", pointsAwarded: 100, maxPoints: 100, reason: `Detected ${enrichment.booking.systemName}` });
       findings.push({ category: 'BOOKING', type: 'STRENGTH', title: 'Online Booking Active', evidence: `Uses ${enrichment.booking.systemName} for scheduling.` });
     } else {
-      breakdown.push({ rule: "Booking System", pointsAwarded: 0, maxPoints: 100, reason: "No booking system detected." });
-      findings.push({ category: 'BOOKING', type: 'WEAKNESS', title: 'No Online Booking', evidence: 'No publicly detectable booking system was found.' });
+      breakdown.push({ rule: "Booking System", pointsAwarded: 0, maxPoints: 100, reason: "No publicly detectable booking system was found in the sources checked." });
+      findings.push({ category: 'BOOKING', type: 'WEAKNESS', title: 'No Online Booking', evidence: 'No publicly detectable booking system was found in the sources checked.' });
     }
 
     return { score, breakdown, findings };
@@ -181,22 +181,22 @@ export class AuditEngine {
       score += 40;
       breakdown.push({ rule: "Facebook", pointsAwarded: 40, maxPoints: 40, reason: "Facebook profile found." });
     } else {
-      breakdown.push({ rule: "Facebook", pointsAwarded: 0, maxPoints: 40, reason: "No Facebook found." });
+      breakdown.push({ rule: "Facebook", pointsAwarded: 0, maxPoints: 40, reason: "No public Facebook profile was detected." });
     }
 
     if (profiles.some(p => p.platform === 'instagram')) {
       score += 30;
       breakdown.push({ rule: "Instagram", pointsAwarded: 30, maxPoints: 30, reason: "Instagram profile found." });
     } else {
-      breakdown.push({ rule: "Instagram", pointsAwarded: 0, maxPoints: 30, reason: "No Instagram found." });
+      breakdown.push({ rule: "Instagram", pointsAwarded: 0, maxPoints: 30, reason: "No public Instagram profile was detected." });
     }
 
     const otherSocials = profiles.filter(p => !['facebook', 'instagram'].includes(p.platform)).length;
     score += Math.min(otherSocials * 15, 30);
-    breakdown.push({ rule: "Other Platforms", pointsAwarded: Math.min(otherSocials * 15, 30), maxPoints: 30, reason: `${otherSocials} other profiles found.` });
+    breakdown.push({ rule: "Other Platforms", pointsAwarded: Math.min(otherSocials * 15, 30), maxPoints: 30, reason: `${otherSocials} other public profiles detected.` });
 
     if (score === 0) {
-      findings.push({ category: 'SOCIAL', type: 'WEAKNESS', title: 'No Social Presence', evidence: 'No public social media profiles detected.' });
+      findings.push({ category: 'SOCIAL', type: 'WEAKNESS', title: 'No Social Presence', evidence: 'No public social media profiles were detected in the sources checked.' });
     }
 
     return { score: Math.min(score, 100), breakdown, findings };

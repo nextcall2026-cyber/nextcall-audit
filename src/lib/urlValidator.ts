@@ -2,6 +2,7 @@ import "server-only";
 import { promises as dns } from "dns";
 import { logger } from "@/lib/logger";
 
+import { getErrorMessage } from "@/lib/errors";
 export interface ValidationResult {
   isValid: boolean;
   normalizedUrl?: string;
@@ -42,7 +43,7 @@ export async function validateUrlForCrawling(rawUrl: string): Promise<Validation
     }
 
     // 3. Normalize Domain (remove www for consistent crawling)
-    let hostname = parsedUrl.hostname.replace(/^www\./, '');
+    const hostname = parsedUrl.hostname.replace(/^www\./, '');
     
     // 4. SSRF Protection: DNS Lookup and IP Validation
     try {
@@ -55,20 +56,20 @@ export async function validateUrlForCrawling(rawUrl: string): Promise<Validation
           return { isValid: false, error: `SSRF Protection: Domain resolves to private/internal IP.` };
         }
       }
-    } catch (dnsError: any) {
+    } catch (dnsError) {
       // If DNS resolution fails (e.g., ENOTFOUND), we can't fetch it safely
-      if (dnsError.code === 'ENOTFOUND') {
+      if ((dnsError as NodeJS.ErrnoException).code === 'ENOTFOUND') {
         return { isValid: false, error: 'DNS resolution failed: Domain not found.' };
       }
       // If it's an IPv6 only domain or other DNS issue, we err on the side of caution for MVP
-      return { isValid: false, error: `DNS resolution error: ${dnsError.message}` };
+      return { isValid: false, error: `DNS resolution error: ${getErrorMessage(dnsError)}` };
     }
 
     // 5. Construct Normalized URL (force HTTPS if possible, strip tracking params if needed later)
     const normalizedUrl = `${parsedUrl.protocol}//${hostname}${parsedUrl.pathname}${parsedUrl.search}`;
     
     return { isValid: true, normalizedUrl };
-  } catch (error: any) {
-    return { isValid: false, error: `Invalid URL format: ${error.message}` };
+  } catch (error) {
+    return { isValid: false, error: `Invalid URL format: ${getErrorMessage(error)}` };
   }
 }
