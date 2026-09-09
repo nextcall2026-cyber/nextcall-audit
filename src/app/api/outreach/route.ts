@@ -111,17 +111,28 @@ export async function POST(request: NextRequest) {
 
     // 9. Send Email via Resend (with Idempotency Key)
     const idempotencyKey = outreachSafetyService.generateIdempotencyKey(prospectId, 0);
-    const sendResult = await emailService.send({
-      to: prospect.contactEmail!,
-      subject,
-      html: htmlBody,
-      idempotencyKey,
-      attachments: auditAttachment ? [auditAttachment] : undefined,
-    });
+    let sendResult;
+    try {
+      sendResult = await emailService.send({
+        to: prospect.contactEmail!,
+        subject,
+        html: htmlBody,
+        text: plainTextBody,
+        idempotencyKey,
+        attachments: auditAttachment ? [auditAttachment] : undefined,
+      });
+    } catch (sendError) {
+      // The throw happened after the claim — revert so the send can be retried
+      await prospectPersistenceService.revertOutreachState(prospectId, 'UNCONTACTED');
+      await outreachPersistenceService.markAsFailed(pendingRecord.id, getErrorMessage(sendError));
+      throw sendError;
+    }
 
-    // 10. Update Record & Prospect State
-    if (sendResult.success && sendResult.providerMessageId) {
-      await outreachPersistenceService.markAsSent(pendingRecord.id, sendResult.providerMessageId);
+    // 10. Update Record & Prospect State.
+    // Success without a provider message id still means Resend accepted the
+    // email — reverting here would cause a duplicate send on retry.
+    if (sendResult.success) {
+      await outreachPersistenceService.markAsSent(pendingRecord.id, sendResult.providerMessageId || "no-id-returned");
       
       // NEW: Recalculate priority because outreach state changed
       await priorityService.recalculatePriorityForProspect(prospectId);

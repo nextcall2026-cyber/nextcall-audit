@@ -30,7 +30,7 @@ export class ProspectPersistenceService {
             { 
               $set: { 
                 businessSnapshot: this.createSnapshot(business),
-                opportunityScore: opportunityScore || existing.existing.opportunityScore || null,
+                opportunityScore: opportunityScore || (existing as { opportunityScore?: number | null }).opportunityScore || null,
                 updatedAt: new Date().toISOString() 
               } 
             }
@@ -380,6 +380,27 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
       logger.info(`[ProspectPersistenceService] Updated priority for ${id}: ${score} (${level})`);
     } catch (error) {
       logger.error(`[ProspectPersistenceService] Failed to update priority for ${id}:`, getErrorMessage(error));
+    }
+  }
+
+  /**
+   * Sets only the priority level (e.g. a manual override from the UI)
+   * without wiping the computed score/breakdown used for list sorting.
+   */
+  async updatePriorityLevel(id: string, level: PriorityLevel): Promise<void> {
+    try {
+      const collection = await getProspectsCollection();
+      await collection.updateOne(
+        { id },
+        { $set: { 
+            priorityLevel: level,
+            updatedAt: new Date().toISOString() 
+          } 
+        }
+      );
+      logger.info(`[ProspectPersistenceService] Updated priority level for ${id}: ${level}`);
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to update priority level for ${id}:`, getErrorMessage(error));
     }
   }
 

@@ -28,6 +28,8 @@ interface MapViewProps {
     onBoundsChange: (bounds: { minLat: number; minLng: number; maxLat: number; maxLng: number }) => void;
     selectedCenter: { lat: number; lng: number } | null;
     onMapClick: (latlng: { lat: number; lng: number }) => void;
+    /** Where the map starts — the picked center if the user restored a session, else a default */
+    initialCenter?: { lat: number; lng: number } | null;
 }
 
 function BoundsTracker({ onBoundsChange }: { onBoundsChange: MapViewProps["onBoundsChange"] }) {
@@ -64,9 +66,9 @@ function ClickHandler({ onMapClick }: { onMapClick: MapViewProps["onMapClick"] }
     return null;
 }
 
-export default function MapView({ businesses, onBoundsChange, selectedCenter, onMapClick }: MapViewProps) {
+export default function MapView({ businesses, onBoundsChange, selectedCenter, onMapClick, initialCenter }: MapViewProps) {
     const markers = useMemo(() => businesses.map((business) => (
-        business.location?.lat && business.location?.lng ? (
+        business.location?.lat != null && business.location?.lng != null ? (
             <Marker
                 key={business.id}
                 position={[business.location.lat, business.location.lng]}
@@ -74,8 +76,13 @@ export default function MapView({ businesses, onBoundsChange, selectedCenter, on
         ) : null
     )), [businesses]);
 
+    const startCenter: [number, number] = [
+        initialCenter?.lat ?? 40.7128,
+        initialCenter?.lng ?? -74.006,
+    ];
+
     return (
-        <MapContainer center={[40.7128, -74.006]} zoom={12} style={{ height: "100%", width: "100%" }}>
+        <MapContainer center={startCenter} zoom={12} style={{ height: "100%", width: "100%" }}>
             <TileLayer
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'

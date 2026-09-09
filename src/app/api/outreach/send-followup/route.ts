@@ -16,7 +16,7 @@ const SendFollowUpSchema = z.object({
   prospectId: z.string().min(1),
   subject: z.string().min(5),
   body: z.string().min(50),
-  stage: z.number().min(0).max(4),
+  stage: z.number().int().min(1).max(4),
   ctaType: z.enum(["ASK_INTEREST", "ASK_PERMISSION", "OFFER_AUDIT", "OFFER_DEMO", "ASK_QUICK_QUESTION", "OPEN_ENDED_REPLY", "CLOSE_LOOP"]),
   angle: z.string().min(5),
 });
@@ -82,16 +82,27 @@ export async function POST(request: NextRequest) {
 
     // 6. Send Email via Resend (with Idempotency Key)
     const idempotencyKey = outreachSafetyService.generateIdempotencyKey(prospectId, stage as OutreachStage);
-    const sendResult = await emailService.send({
-      to: prospect.contactEmail!,
-      subject,
-      html: htmlBody,
-      idempotencyKey
-    });
+    let sendResult;
+    try {
+      sendResult = await emailService.send({
+        to: prospect.contactEmail!,
+        subject,
+        html: htmlBody,
+        text: plainTextBody,
+        idempotencyKey
+      });
+    } catch (sendError) {
+      // The throw happened after the claim — revert so the stage can be retried
+      await prospectPersistenceService.revertOutreachState(prospectId, transition.expected);
+      await outreachPersistenceService.markAsFailed(pendingRecord.id, getErrorMessage(sendError));
+      throw sendError;
+    }
 
-    // 7. Update Record & Prospect State
-    if (sendResult.success && sendResult.providerMessageId) {
-      await outreachPersistenceService.markAsSent(pendingRecord.id, sendResult.providerMessageId);
+    // 7. Update Record & Prospect State.
+    // Success without a provider message id still means Resend accepted the
+    // email — reverting here would cause a duplicate send on retry.
+    if (sendResult.success) {
+      await outreachPersistenceService.markAsSent(pendingRecord.id, sendResult.providerMessageId || "no-id-returned");
       
       if (stage < 4) {
         const nextDate = new Date();

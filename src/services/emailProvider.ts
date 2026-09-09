@@ -4,6 +4,8 @@ export interface SendEmailInput {
   to: string;
   subject: string;
   html: string;
+  /** Plain-text alternative — improves deliverability (avoids HTML-only penalty) */
+  text?: string;
   idempotencyKey: string; // Critical for safe retries
   attachments?: EmailAttachment[];
 }

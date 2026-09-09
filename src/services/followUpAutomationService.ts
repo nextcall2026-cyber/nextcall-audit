@@ -11,6 +11,7 @@ import { renderEmailHtml } from "@/lib/emailRenderer";
 import { getOpenTrackingUrl } from "@/lib/openTracking";
 import { priorityService } from "@/services/priorityService";
 import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FOLLOW_UP_1_DELAY_MS = 3 * DAY_MS; // 3 days after the initial email was opened
@@ -166,15 +167,25 @@ export class FollowUpAutomationService {
     }
 
     const idempotencyKey = outreachSafetyService.generateIdempotencyKey(prospectId, stage as OutreachStage);
-    const sendResult = await emailService.send({
-      to: prospect.contactEmail!,
-      subject: draft.subject,
-      html: htmlBody,
-      idempotencyKey,
-    });
+    let sendResult;
+    try {
+      sendResult = await emailService.send({
+        to: prospect.contactEmail!,
+        subject: draft.subject,
+        html: htmlBody,
+        text: draft.body,
+        idempotencyKey,
+      });
+    } catch (sendError) {
+      // The throw happened after the claim — revert so the sweep can retry
+      await prospectPersistenceService.revertOutreachState(prospectId, transition.expected);
+      await outreachPersistenceService.markAsFailed(pendingRecord.id, getErrorMessage(sendError));
+      logger.error(`[FollowUpAutomation] Send threw for prospect ${prospectId}: ${getErrorMessage(sendError)}`);
+      return false;
+    }
 
-    if (sendResult.success && sendResult.providerMessageId) {
-      await outreachPersistenceService.markAsSent(pendingRecord.id, sendResult.providerMessageId);
+    if (sendResult.success) {
+      await outreachPersistenceService.markAsSent(pendingRecord.id, sendResult.providerMessageId || "no-id-returned");
 
       if (stage === 1) {
         const nextDate = new Date(baseOpenedAtMs + FOLLOW_UP_2_DELAY_MS);

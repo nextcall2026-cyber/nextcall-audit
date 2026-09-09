@@ -11,7 +11,7 @@ import { getErrorMessage } from "@/lib/errors";
 // 1. Define the Schema at the top level
 const UpdateProspectSchema = z.object({
   status: z.enum(["NEW", "READY_TO_CONTACT", "CONTACTED", "FOLLOW_UP", "QUALIFIED", "CONVERTED", "UNQUALIFIED", "CLOSED_LOST"]).optional(),
-  priority: z.enum(["HIGH", "MEDIUM", "LOW"]).optional(),
+  priority: z.enum(["HOT", "HIGH", "MEDIUM", "LOW"]).optional(),
   nextFollowUpAt: z.string().nullable().optional(),
   noteText: z.string().optional(),
   isSuppressed: z.boolean().optional(),             
@@ -106,12 +106,14 @@ export async function PATCH(
     const { status, priority, nextFollowUpAt, noteText, isSuppressed, suppressionReason, contactEmail } = parsed.data;
 
     // Empty PATCH body signals "mark as viewed"
-    if (!status && !priority && !noteText && isSuppressed === undefined && contactEmail === undefined) {
+    if (!status && !priority && !noteText && !nextFollowUpAt && isSuppressed === undefined && contactEmail === undefined) {
       await prospectPersistenceService.markAsViewed(id);
     }
 
     if (status) await prospectPersistenceService.updateStatus(id, status);
-    if (priority) await prospectPersistenceService.updatePriority(id, null, priority, null);
+    // A manual priority change sets only the level — keep the computed
+    // score/breakdown so list sorting still works
+    if (priority) await prospectPersistenceService.updatePriorityLevel(id, priority);
     if (nextFollowUpAt !== undefined) await prospectPersistenceService.setNextFollowUp(id, nextFollowUpAt);
     if (noteText) await prospectPersistenceService.addNote(id, noteText);
     if (contactEmail !== undefined) await prospectPersistenceService.updateContactEmail(id, contactEmail);

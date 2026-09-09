@@ -179,19 +179,16 @@ Please write the follow-up email draft for Stage ${currentStage}.
         );
       }
 
-      // Convert plain text body to basic HTML for previewing/sending
-      const htmlBody = validationResult.data.body.replace(
-        /\n/g,
-        "<br>"
-      );
-
+      // Body stays plain text: every sender passes it through
+      // renderEmailHtml, which does the single canonical newline -> <br>
+      // conversion (HTML-ifying here would get escaped a second time).
       logger.info(
         `[AIFollowupService] Successfully generated Stage ${currentStage} draft. Angle: ${validationResult.data.angle}`
       );
 
       return {
         subject: validationResult.data.subject,
-        body: htmlBody,
+        body: validationResult.data.body,
         stage: currentStage,
         ctaType: validationResult.data.ctaType as CTAType,
         angle: validationResult.data.angle,

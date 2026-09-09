@@ -23,24 +23,32 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing svix headers" }, { status: 400 });
     }
 
-    // 1a. REPLAY PROTECTION: Check if timestamp is within 5 minutes
+    // 1a. REPLAY PROTECTION: Reject stale or far-future timestamps (5 min window)
     const timestampAge = Math.floor(Date.now() / 1000) - parseInt(svixTimestamp, 10);
-    if (timestampAge > 300) { // 300 seconds = 5 minutes
-      logger.warn(`[API /webhooks/resend] Rejected stale webhook (Age: ${timestampAge}s)`);
-      return NextResponse.json({ error: "Stale webhook timestamp" }, { status: 401 });
+    if (Number.isNaN(timestampAge) || Math.abs(timestampAge) > 300) {
+      logger.warn(`[API /webhooks/resend] Rejected webhook with out-of-window timestamp (Age: ${timestampAge}s)`);
+      return NextResponse.json({ error: "Invalid webhook timestamp" }, { status: 401 });
     }
 
-    // 2. Verify Signature
+    // 2. Verify Signature (Svix scheme: header is "v1,<base64>", possibly
+    // multiple space-separated entries; secret is "whsec_<base64>")
+    const secret = env.RESEND_WEBHOOK_SECRET;
+    const secretKey = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
     const signedPayload = `${svixId}.${svixTimestamp}.${rawBody}`;
-    const expectedSignature = crypto
-      .createHmac("sha256", env.RESEND_WEBHOOK_SECRET)
-      .update(signedPayload)
-      .digest("hex");
+    const expected = crypto.createHmac("sha256", secretKey).update(signedPayload).digest(); // base64 bytes
 
-    // Compare signatures securely
-    const signatureBuffer = Buffer.from(svixSignature);
-    const expectedBuffer = Buffer.from(expectedSignature);
-    if (signatureBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
+    const passed = svixSignature
+      .split(/\s+/)
+      .filter((entry) => entry.startsWith("v1,"))
+      .some((entry) => {
+        const provided = Buffer.from(entry.slice("v1,".length), "base64");
+        return (
+          provided.length === expected.length &&
+          crypto.timingSafeEqual(provided, expected)
+        );
+      });
+
+    if (!passed) {
       logger.warn("[API /webhooks/resend] Invalid webhook signature");
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
     }

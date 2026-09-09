@@ -56,6 +56,18 @@ const RADIUS_OPTIONS = [
 
 const SESSION_KEY = "nextcall_discovery_state";
 
+/** Bounding box for a center point plus radius, in meters. */
+function boundingBoxFromCenter(center: { lat: number; lng: number }, radiusMeters: number): BoundingBox {
+    const latDelta = radiusMeters / 111000;
+    const lngDelta = radiusMeters / (111000 * Math.cos((center.lat * Math.PI) / 180));
+    return {
+        minLat: center.lat - latDelta,
+        maxLat: center.lat + latDelta,
+        minLng: center.lng - lngDelta,
+        maxLng: center.lng + lngDelta,
+    };
+}
+
 interface DiscoverySessionState {
     selectedNiche?: string;
     customNiche?: string;
@@ -152,8 +164,18 @@ export default function DiscoveryClient() {
     const canSearch = !isLoading && selectedCenter && bounds && query.trim().length > 0;
 
     const handleSearch = async () => {
-        if (!query || !bounds) {
-            setError("Please enter a search term and ensure the map is loaded.");
+        if (!query) {
+            setError("Please enter a search term.");
+            return;
+        }
+
+        // Search the circle the user picked (center + radius). Without a
+        // picked center, fall back to the current map viewport.
+        const searchBox = selectedCenter
+            ? boundingBoxFromCenter(selectedCenter, radiusMeters)
+            : bounds;
+        if (!searchBox) {
+            setError("Please pick a location on the map first.");
             return;
         }
 
@@ -164,11 +186,11 @@ export default function DiscoveryClient() {
             const response = await fetch("/api/discover", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ query, boundingBox: bounds, targetResults: 50 }),
+                body: JSON.stringify({ query, boundingBox: searchBox, targetResults: 50 }),
             });
 
             if (!response.ok) {
-                const errData = await response.json();
+                const errData = await response.json().catch(() => ({ error: "Failed to fetch businesses" }));
                 throw new Error(errData.error || "Failed to fetch businesses");
             }
 
@@ -371,6 +393,7 @@ export default function DiscoveryClient() {
                         onBoundsChange={handleBoundsChange}
                         selectedCenter={selectedCenter}
                         onMapClick={handleMapClick}
+                        initialCenter={selectedCenter}
                     />
                 </div>
 

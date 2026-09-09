@@ -2,7 +2,7 @@ import "server-only";
 import { Business, BusinessDiscoveryParams, BoundingBox, ProviderConfig, ProviderDiscoveryResult, DiscoveryProviderName } from "@/types";
 import { BusinessDiscoveryProvider } from "@/providers/index";
 import { env } from "@/lib/env";
-import { ProviderError } from "@/lib/errors";
+import { ProviderError, RateLimitError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
@@ -17,7 +17,7 @@ interface GeoapifyFeature {
     state?: string;
     postcode?: string;
     country?: string;
-    categories?: string;
+    categories?: string | string[];
     place_id?: string;
     datasource?: { url?: string; raw?: { osm_id?: string | number } };
   };
@@ -67,6 +67,9 @@ export class GeoapifyProvider extends BusinessDiscoveryProvider {
       });
 
       if (!response.ok) {
+        if (response.status === 429) {
+          throw new RateLimitError("Geoapify rate limit exceeded.", this.name);
+        }
         const errorBody = await response.text();
         throw new ProviderError(
           `Geoapify API request failed with status ${response.status}: ${errorBody}`,
@@ -106,7 +109,9 @@ export class GeoapifyProvider extends BusinessDiscoveryProvider {
         },
         rating: undefined,
         reviewCount: undefined,
-        categories: raw.categories?.split(",") || [],
+        categories: Array.isArray(raw.categories)
+          ? raw.categories
+          : raw.categories?.split(",") || [],
         providerIds: { geoapify: raw.place_id || String(raw.datasource?.raw?.osm_id ?? "") },
         providerUrl: raw.datasource?.url,
         status: raw.state === "closed" ? "permanently_closed" : "active",

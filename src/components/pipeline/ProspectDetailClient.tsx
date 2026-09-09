@@ -22,8 +22,15 @@ interface ProspectDetailData {
 }
 
 const PIPELINE_STATUSES: PipelineStatus[] = [
-    "NEW", "READY_TO_CONTACT", "CONTACTED", "FOLLOW_UP", "QUALIFIED", "UNQUALIFIED", "CLOSED_LOST"
+    "NEW", "READY_TO_CONTACT", "CONTACTED", "FOLLOW_UP", "QUALIFIED", "UNQUALIFIED", "CONVERTED", "CLOSED_LOST"
 ];
+
+// Base UI Select only shows item labels in the trigger when `items` is
+// provided — otherwise the raw enum value is displayed.
+const PIPELINE_STATUS_ITEMS = PIPELINE_STATUSES.map((status) => ({
+    value: status,
+    label: status.replace(/_/g, " "),
+}));
 
 const STOP_PIPELINE_STATUSES: PipelineStatus[] = ["QUALIFIED", "UNQUALIFIED", "CLOSED_LOST"];
 const STOP_OUTREACH_STATES: OutreachSequenceState[] = ["CLOSE_LOOP_SENT", "COMPLETED", "REPLIED", "BOUNCED", "UNSUBSCRIBED", "STOPPED"];
@@ -344,7 +351,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                 </div>
                 <div className="flex flex-col gap-2 w-48">
                     <label className="text-xs text-gray-500 uppercase tracking-wide">Pipeline Status</label>
-                    <Select value={prospect.pipelineStatus} onValueChange={(v) => handleStatusChange(v as PipelineStatus)}>
+                    <Select items={PIPELINE_STATUS_ITEMS} value={prospect.pipelineStatus} onValueChange={(v) => handleStatusChange(v as PipelineStatus)}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
                             {PIPELINE_STATUSES.map(status => (
@@ -930,8 +937,8 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                                                 className="bg-white"
                                             />
                                             <Textarea
-                                                value={draft.body.replace(/<br>/g, '\n')}
-                                                onChange={(e) => setDraft({ ...draft, body: e.target.value.replace(/\n/g, '<br>') })}
+                                                value={draft.body}
+                                                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
                                                 rows={6}
                                                 placeholder="Email Body"
                                                 className="bg-white text-sm"

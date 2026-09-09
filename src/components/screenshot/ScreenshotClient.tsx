@@ -81,6 +81,8 @@ export default function ScreenshotClient() {
     setResult(null);
     setFields(EMPTY_FIELDS);
     setMissing([]);
+    setInPipeline(false);
+    setNotes("");
     setSelectedFile(file);
     if (previewUrl) window.URL.revokeObjectURL(previewUrl);
     setPreviewUrl(window.URL.createObjectURL(file));

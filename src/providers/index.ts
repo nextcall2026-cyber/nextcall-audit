@@ -26,6 +26,10 @@ export abstract class BusinessDiscoveryProvider {
     try {
       return await call();
     } catch (error) {
+      // Preserve typed errors so the orchestrator can distinguish them
+      if (error instanceof RateLimitError || error instanceof ProviderError) {
+        throw error;
+      }
       // Detect common rate limit / quota errors
       const responseStatus = (error as { response?: { status?: number } } | null)?.response?.status;
       if (responseStatus === 429) {

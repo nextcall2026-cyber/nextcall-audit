@@ -159,7 +159,7 @@ WEBSITE ENRICHMENT DATA:
 
 CONTACT METHODS FOUND:
 - Public Emails: ${business.enrichment?.emails?.map(e => e.address).join(", ") || "None found"}
-- Public Phones: ${business.enrichment?.phones?.join(", ") || "None found"}
+- Public Phones: ${business.enrichment?.phones?.map(p => p.normalized || p.number).join(", ") || "None found"}
 
 SOCIAL PROFILES FOUND:
  ${business.enrichment?.socialProfiles?.map(s => `- ${s.platform}: ${s.url}`).join("\n") || "None found"}

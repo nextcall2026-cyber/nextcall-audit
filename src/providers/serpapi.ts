@@ -2,7 +2,7 @@ import "server-only";
 import { Business, BusinessDiscoveryParams, BoundingBox, ProviderConfig, ProviderDiscoveryResult, DiscoveryProviderName } from "@/types";
 import { BusinessDiscoveryProvider } from "@/providers/index";
 import { env } from "@/lib/env";
-import { ProviderError } from "@/lib/errors";
+import { ProviderError, RateLimitError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
@@ -61,6 +61,9 @@ export class SerpApiProvider extends BusinessDiscoveryProvider {
       });
 
       if (!response.ok) {
+        if (response.status === 429) {
+          throw new RateLimitError("SerpApi rate limit exceeded.", this.name);
+        }
         const errorBody = await response.text();
         throw new ProviderError(
           `SerpApi request failed with status ${response.status}: ${errorBody}`,

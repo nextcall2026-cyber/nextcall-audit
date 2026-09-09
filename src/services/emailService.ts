@@ -22,6 +22,7 @@ export class EmailService implements IEmailProvider {
         to: input.to,
         subject: input.subject,
         html: input.html,
+        ...(input.text ? { text: input.text } : {}),
         attachments: input.attachments?.map(a => ({
           filename: a.filename,
           content: a.content instanceof Uint8Array && !Buffer.isBuffer(a.content)

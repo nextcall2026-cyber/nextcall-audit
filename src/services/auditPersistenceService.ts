@@ -31,7 +31,7 @@ export class AuditPersistenceService {
   async getLatestAudit(businessId: string): Promise<StoredAudit | null> {
     try {
       const collection = await getAuditsCollection();
-      const cursor = collection.find({ businessId }, { limit: 1 });
+      const cursor = collection.find({ businessId }, { sort: { createdAt: -1 }, limit: 1 });
       const docs = await cursor.toArray();
       
       if (docs.length > 0) {

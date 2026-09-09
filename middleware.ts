@@ -14,6 +14,13 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // 2b. Allow the email open-tracking pixel: email recipients' mail clients
+  // request this URL without any auth cookie. It only marks a known
+  // outreach record as opened.
+  if (pathname.startsWith('/api/tracking')) {
+    return NextResponse.next();
+  }
+
   // 3. Protect Dashboard and all other APIs
   if (pathname.startsWith('/dashboard') || pathname.startsWith('/api')) {
     const authToken = request.cookies.get('nextcall_auth')?.value;

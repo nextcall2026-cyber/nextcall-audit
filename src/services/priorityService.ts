@@ -19,7 +19,9 @@ export class PriorityService {
     let contactability = 0;
     const hasEmail = !!(prospect.contactEmail || business.enrichment?.emails?.length);
     const hasPhone = !!(business.phone || business.enrichment?.phones?.length);
-    const hasForm = !!business.enrichment?.features?.hasContactForm;
+    // Tri-state: 'UNKNOWN' means the audit could not verify it — don't
+    // award points for an unverified contact form
+    const hasForm = business.enrichment?.features?.hasContactForm === true;
 
     if (hasEmail) { contactability += 50; reasons.push("Valid business email found"); }
     if (hasPhone) { contactability += 30; reasons.push("Phone number available"); }
