@@ -123,6 +123,31 @@ describe("LLM gateway routing", () => {
     expect(providerMocks.geminiComplete).toHaveBeenCalledTimes(2);
   });
 
+  it("retries the primary once on a transient error before falling back", async () => {
+    providerMocks.geminiComplete
+      .mockRejectedValueOnce(new ProviderError("gemini", "transient", "high demand"))
+      .mockResolvedValueOnce('{"ok":true}');
+
+    const result = await generateLLMResponse(baseRequest);
+
+    expect(result.provider).toBe("gemini");
+    expect(result.fallback).toBe(false);
+    expect(providerMocks.geminiComplete).toHaveBeenCalledTimes(2);
+    expect(providerMocks.openaiComplete).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("falls back when the transient retry also fails", async () => {
+    providerMocks.geminiComplete.mockRejectedValue(
+      new ProviderError("gemini", "transient", "high demand")
+    );
+    providerMocks.openaiComplete.mockResolvedValueOnce("fallback-text");
+
+    const result = await generateLLMResponse(baseRequest);
+
+    expect(result.provider).toBe("openai");
+    expect(providerMocks.geminiComplete).toHaveBeenCalledTimes(2);
+  }, 10000);
+
   it("throws LLMUnavailableError when every provider fails", async () => {
     providerMocks.geminiComplete.mockRejectedValue(
       new ProviderError("gemini", "transient", "gemini down")

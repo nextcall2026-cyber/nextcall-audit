@@ -3,7 +3,7 @@ import { logger } from "@/lib/logger";
 import { breaker } from "./breaker";
 import { GeminiProvider } from "./gemini";
 import { OpenAIProvider } from "./openaiProvider";
-import { LLMProvider, LLMRequest, LLMResponse, LLMUnavailableError, ProviderError, ProviderId } from "./types";
+import { LLMProvider, LLMRequest, LLMResponse, LLMUnavailableError, ProviderError, ProviderErrorKind, ProviderId } from "./types";
 
 /**
  * LLM gateway — the single entry point every AI feature in this app uses.
@@ -43,6 +43,45 @@ const PROVIDER_DESCRIPTORS: Array<{ id: ProviderId; label: string; role: "primar
   { id: "openai", label: "OpenAI", role: "fallback" },
 ];
 
+/** Transient spikes (e.g. "high demand" 503s) usually clear within seconds —
+ * give the provider one quick second chance before falling back. */
+const TRANSIENT_RETRY_DELAY_MS = 2000;
+const RETRYABLE_KINDS: ReadonlySet<ProviderErrorKind> = new Set(["transient", "rate-limit"]);
+
+async function attemptWithTransientRetry(provider: LLMProvider, req: LLMRequest): Promise<string> {
+  try {
+    return await provider.complete(req);
+  } catch (error) {
+    const firstError =
+      error instanceof ProviderError
+        ? error
+        : new ProviderError(
+            provider.id,
+            "transient",
+            error instanceof Error ? error.message : String(error)
+          );
+
+    if (!RETRYABLE_KINDS.has(firstError.kind)) throw firstError;
+
+    logger.warn(
+      `[LLMGateway] ${provider.label} transient ${firstError.kind} failure — retrying once in ${TRANSIENT_RETRY_DELAY_MS}ms: ${firstError.message}`
+    );
+    await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_DELAY_MS));
+
+    try {
+      return await provider.complete(req);
+    } catch (retryError) {
+      throw retryError instanceof ProviderError
+        ? retryError
+        : new ProviderError(
+            provider.id,
+            "transient",
+            retryError instanceof Error ? retryError.message : String(retryError)
+          );
+    }
+  }
+}
+
 export async function generateLLMResponse(req: LLMRequest): Promise<LLMResponse> {
   if (providerChain.length === 0) {
     throw new LLMUnavailableError(
@@ -62,7 +101,7 @@ export async function generateLLMResponse(req: LLMRequest): Promise<LLMResponse>
     }
 
     try {
-      const text = await provider.complete(req);
+      const text = await attemptWithTransientRetry(provider, req);
       breaker.recordSuccess(provider.id);
       if (index > 0) {
         logger.warn(
