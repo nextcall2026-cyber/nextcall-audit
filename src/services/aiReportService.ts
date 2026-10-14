@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { Business, AuditResult, AuditReport } from "@/types";
-import { getOpenAIClient } from "@/lib/ai";
+import { generateLLMResponse } from "@/lib/ai";
 import { logger } from "@/lib/logger";
 
 import { getErrorMessage } from "@/lib/errors";
@@ -19,7 +19,6 @@ const ReportSchema = z.object({
 export class AIReportService {
   async generateAuditReport(business: Business, audit: AuditResult): Promise<AuditReport> {
     logger.info(`[AIReportService] Generating advanced customer-journey AI report for ${business.name}...`);
-    const client = getOpenAIClient();
 
     const systemPrompt = `
 You are an expert B2B digital presence consultant and conversion-focused business analyst working for NextCall.
@@ -185,21 +184,19 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
 `;
 
     try {
-      const response = await client.chat.completions.create({
-        model: "gpt-4o-mini",
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
+      const llm = await generateLLMResponse({
+        system: systemPrompt,
+        user: userPrompt,
         temperature: 0.5, // Slightly higher to allow for more natural journey analysis, but still grounded
-        max_tokens: 1500, // Increased to accommodate the expanded report structure
+        maxOutputTokens: 1500, // Increased to accommodate the expanded report structure
+        json: true,
+        thinking: "low", // small reasoning budget improves prose quality for this long-form report
       });
+      logger.info(
+        `[AIReportService] Report drafted by ${llm.provider} (${llm.model})${llm.fallback ? " [fallback]" : ""}.`
+      );
 
-      const content = response.choices[0]?.message?.content;
-      if (!content) {
-        throw new Error("AI returned empty response.");
-      }
+      const content = llm.text;
 
       const parsedJson = JSON.parse(content);
       const validationResult = ReportSchema.safeParse(parsedJson);

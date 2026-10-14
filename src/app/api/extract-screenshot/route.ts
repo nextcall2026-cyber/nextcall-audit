@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getOpenAIClient } from "@/lib/ai";
+import { generateLLMResponse } from "@/lib/ai";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 
@@ -51,34 +51,21 @@ export async function POST(request: NextRequest) {
     }
 
     const bytes = Buffer.from(await file.arrayBuffer());
-    const dataUrl = `data:${file.type};base64,${bytes.toString("base64")}`;
-
-    const client = getOpenAIClient();
 
     let parsed: z.infer<typeof ScreenshotExtractSchema> | null = null;
 
     for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
-      const completion = await client.chat.completions.create({
-        model: "gpt-4o-mini",
+      const llm = await generateLLMResponse({
+        system: SYSTEM_PROMPT,
+        user: "Extract the business details from this screenshot. If a field is not visible, return null for it.",
+        images: [{ mimeType: file.type, data: bytes.toString("base64") }],
         temperature: 0,
-        max_tokens: 1000,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Extract the business details from this screenshot. If a field is not visible, return null for it.",
-              },
-              { type: "image_url", image_url: { url: dataUrl } },
-            ],
-          },
-        ],
+        maxOutputTokens: 1000,
+        json: true,
+        thinking: "off",
       });
 
-      const raw = completion.choices[0]?.message?.content;
+      const raw = llm.text;
       if (!raw) break;
 
       try {
@@ -115,9 +102,9 @@ export async function POST(request: NextRequest) {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("[API /extract-screenshot] Extraction failed:", message);
-    const isKeyMissing = message.includes("OPENAI_API_KEY");
+    const isUnconfigured = message.includes("No LLM provider is configured");
     return NextResponse.json(
-      { error: isKeyMissing ? "OPENAI_API_KEY is not configured." : "Failed to extract data from screenshot." },
+      { error: isUnconfigured ? "No AI provider is configured. Set GEMINI_API_KEY or OPENAI_API_KEY." : "Failed to extract data from screenshot." },
       { status: 500 }
     );
   }

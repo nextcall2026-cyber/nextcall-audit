@@ -6,8 +6,11 @@ const envSchema = z.object({
   ASTRA_DB_APPLICATION_TOKEN: z.string().optional(),
   ASTRA_DB_API_ENDPOINT: z.string().optional(),
 
-  // AI Provider (OpenAI)
+  // AI Providers — primary: Google Gemini, automatic fallback: OpenAI
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().optional(),
 
   // Business Discovery Providers
   SERPAPI_API_KEY: z.string().optional(),
