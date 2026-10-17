@@ -177,6 +177,22 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
 
 
   /**
+   * Fetches a single outreach record by its id.
+   * Used by the unsubscribe endpoint to resolve the prospect from the
+   * email footer link.
+   */
+  async getOutreachById(id: string): Promise<OutreachRecord | null> {
+    try {
+      const collection = await getOutreachCollection();
+      const doc = await collection.findOne({ id });
+      return doc as unknown as OutreachRecord | null;
+    } catch (error) {
+      logger.error(`[OutreachPersistenceService] Failed to get outreach record ${id}:`, getErrorMessage(error));
+      return null;
+    }
+  }
+
+  /**
    * NEW: Updates the delivery status of an outreach record based on webhook events.
    * Also returns the prospectId so the caller can suppress the prospect if needed.
    */

@@ -23,6 +23,18 @@ describe('emailRenderer', () => {
     expect(html).toContain('UNSUBSCRIBE');
   });
 
+  it('should render the UNSUBSCRIBE button when a URL is provided', () => {
+    const html = renderEmailHtml('Body', undefined, undefined, 'https://app.example.com/api/tracking/unsubscribe?o=abc&t=sig');
+    expect(html).toContain('href="https://app.example.com/api/tracking/unsubscribe?o=abc&amp;t=sig"');
+    expect(html).toContain('>UNSUBSCRIBE</a>');
+  });
+
+  it('should keep the reply-based footer when no unsubscribe URL is provided', () => {
+    const html = renderEmailHtml('Body');
+    expect(html).toContain('simply reply with');
+    expect(html).not.toContain('/api/tracking/unsubscribe');
+  });
+
   it('should render a clickable CTA for http(s) URLs', () => {
     const html = renderEmailHtml('Body', undefined, {
       label: 'Try NextCall free for 3 days',

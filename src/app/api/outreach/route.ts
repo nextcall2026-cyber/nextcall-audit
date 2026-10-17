@@ -8,6 +8,7 @@ import { EmailAttachment } from "@/services/emailProvider";
 import { outreachSafetyService } from "@/services/outreachSafetyService";
 import { renderEmailHtml } from "@/lib/emailRenderer";
 import { getOpenTrackingUrl } from "@/lib/openTracking";
+import { getUnsubscribeUrl } from "@/lib/unsubscribe";
 import { logger } from "@/lib/logger";
 import { ValidationError, getErrorMessage } from "@/lib/errors";
 import { priorityService } from "@/services/priorityService";
@@ -93,11 +94,13 @@ export async function POST(request: NextRequest) {
 
     if (!pendingRecord) throw new Error("Failed to create outreach record.");
 
-    // 6b. Render Safe HTML with the open-tracking pixel attached
+    // 6b. Render Safe HTML with the open-tracking pixel and the signed
+    // unsubscribe button attached
     const htmlBody = renderEmailHtml(
       plainTextBody,
       getOpenTrackingUrl(pendingRecord.id),
-      ctaLink ?? undefined
+      ctaLink ?? undefined,
+      getUnsubscribeUrl(pendingRecord.id)
     );
     await outreachPersistenceService.updateBody(pendingRecord.id, htmlBody);
 

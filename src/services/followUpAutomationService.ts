@@ -9,6 +9,7 @@ import { emailService } from "@/services/emailService";
 import { outreachSafetyService } from "@/services/outreachSafetyService";
 import { renderEmailHtml } from "@/lib/emailRenderer";
 import { getOpenTrackingUrl } from "@/lib/openTracking";
+import { getUnsubscribeUrl } from "@/lib/unsubscribe";
 import { priorityService } from "@/services/priorityService";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
@@ -148,7 +149,7 @@ export class FollowUpAutomationService {
     );
     if (!pendingRecord) return false;
 
-    const htmlBody = renderEmailHtml(draft.body, getOpenTrackingUrl(pendingRecord.id));
+    const htmlBody = renderEmailHtml(draft.body, getOpenTrackingUrl(pendingRecord.id), undefined, getUnsubscribeUrl(pendingRecord.id));
     await outreachPersistenceService.updateBody(pendingRecord.id, htmlBody);
 
     const transition = STAGE_TRANSITIONS[stage];
