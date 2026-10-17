@@ -14,9 +14,25 @@ interface EnrichedProspect extends Prospect {
     auditScore: number | null;
 }
 
-const STATUS_FILTERS: ("DUE" | PipelineStatus | "ALL")[] = [
-    "DUE", "ALL", "NEW", "READY_TO_CONTACT", "CONTACTED", "FOLLOW_UP", "QUALIFIED", "UNQUALIFIED"
+const STATUS_FILTERS: ("DUE" | "EMAILED" | PipelineStatus | "ALL")[] = [
+    "DUE", "ALL", "EMAILED", "NEW", "READY_TO_CONTACT", "CONTACTED", "FOLLOW_UP", "QUALIFIED", "UNQUALIFIED"
 ];
+
+// Human label per outreach sequence state, shown on pipeline cards so the
+// list answers "whom have I emailed and where are they in the sequence?".
+const OUTREACH_STATE_LABELS: Record<string, string> = {
+    UNCONTACTED: "",
+    INITIAL_SENT: "Email sent",
+    FOLLOW_UP_1_SENT: "Follow-up 1 sent",
+    FOLLOW_UP_2_SENT: "Follow-up 2 sent",
+    FOLLOW_UP_3_SENT: "Follow-up 3 sent",
+    CLOSE_LOOP_SENT: "Close-loop sent",
+    COMPLETED: "Sequence completed",
+    REPLIED: "Replied",
+    BOUNCED: "Bounced",
+    UNSUBSCRIBED: "Unsubscribed",
+    STOPPED: "Stopped",
+};
 
 const getOppColor = (score: OpportunityScore | null | undefined) => {
     if (!score) return "text-gray-300";
@@ -29,7 +45,7 @@ const getOppColor = (score: OpportunityScore | null | undefined) => {
 export default function PipelineClient() {
     const [prospects, setProspects] = useState<EnrichedProspect[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [activeFilter, setActiveFilter] = useState<"DUE" | PipelineStatus | "ALL">("ALL");
+    const [activeFilter, setActiveFilter] = useState<"DUE" | "EMAILED" | PipelineStatus | "ALL">("ALL");
 
     useEffect(() => {
         const fetchProspects = async () => {
@@ -91,6 +107,12 @@ export default function PipelineClient() {
             return (status === "OVERDUE" || status === "DUE_TODAY") &&
                 !["UNQUALIFIED", "CLOSED_LOST", "CONVERTED"].includes(p.pipelineStatus);
         })
+        : activeFilter === "EMAILED"
+        ? prospects
+            .filter(p => p.lastContactedAt !== null || p.outreachState !== "UNCONTACTED")
+            .sort((a, b) =>
+                new Date(b.lastContactedAt ?? 0).getTime() - new Date(a.lastContactedAt ?? 0).getTime()
+            )
         : prospects;
 
     return (
@@ -117,6 +139,8 @@ export default function PipelineClient() {
                         <CardContent className="p-8 text-center text-gray-500">
                             {activeFilter === "DUE"
                                 ? "No follow-ups due! You're all caught up."
+                                : activeFilter === "EMAILED"
+                                ? "No emails sent yet. Open a prospect in the pipeline and send the initial outreach email."
                                 : "No prospects found in this stage. Discover businesses and add them to your pipeline!"}
                         </CardContent>
                     </Card>
@@ -126,6 +150,8 @@ export default function PipelineClient() {
                     const followUpStatus = getFollowUpStatus(p.nextFollowUpAt);
                     const isUnread = !p.viewAddedAt;
                     const hasAudit = p.auditScore !== null;
+                    const wasEmailed = p.lastContactedAt !== null || p.outreachState !== "UNCONTACTED";
+                    const outreachLabel = OUTREACH_STATE_LABELS[p.outreachState] ?? p.outreachState.replace(/_/g, " ").toLowerCase();
 
                     return (
                         <Link href={`/dashboard/pipeline/${p.id}`} key={p.id} className="block">
@@ -159,6 +185,18 @@ export default function PipelineClient() {
                                     <span className="text-xs text-gray-500 mt-1">
                                         Status: <span className="font-medium text-slate-700">{p.pipelineStatus.replace(/_/g, " ")}</span>
                                     </span>
+                                    {wasEmailed && (
+                                        <span className="text-xs text-gray-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                                            <span>
+                                                Last email: <span className="font-medium text-slate-700">{p.lastContactedAt ? new Date(p.lastContactedAt).toLocaleDateString() : "—"}</span>
+                                            </span>
+                                            {outreachLabel && (
+                                                <span className="text-[10px] px-1.5 py-0.5 bg-sky-100 text-sky-700 rounded font-medium uppercase tracking-wide">
+                                                    {outreachLabel}
+                                                </span>
+                                            )}
+                                        </span>
+                                    )}
                                 </div>
 
                                 <div className="flex items-center gap-6">

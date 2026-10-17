@@ -162,6 +162,31 @@ export class ProspectPersistenceService {
   }
 
   /**
+   * Advances the pipeline status after a successful email send.
+   * Initial send: NEW/READY_TO_CONTACT -> CONTACTED.
+   * Follow-up send: NEW/READY_TO_CONTACT/CONTACTED -> FOLLOW_UP.
+   * Never overwrites manual or terminal stages (QUALIFIED, CONVERTED,
+   * UNQUALIFIED, CLOSED_LOST).
+   */
+  async advancePipelineStatusForContact(id: string, nextStatus: 'CONTACTED' | 'FOLLOW_UP'): Promise<void> {
+    try {
+      const collection = await getProspectsCollection();
+      const fromStatuses: PipelineStatus[] = nextStatus === 'CONTACTED'
+        ? ['NEW', 'READY_TO_CONTACT']
+        : ['NEW', 'READY_TO_CONTACT', 'CONTACTED'];
+      const result = await collection.updateOne(
+        { id, pipelineStatus: { $in: fromStatuses } },
+        { $set: { pipelineStatus: nextStatus, updatedAt: new Date().toISOString() } }
+      );
+      if (result.modifiedCount > 0) {
+        logger.info(`[ProspectPersistenceService] Advanced pipelineStatus to ${nextStatus} for prospect ${id}.`);
+      }
+    } catch (error) {
+      logger.error(`[ProspectPersistenceService] Failed to advance pipeline status for ${id}:`, getErrorMessage(error));
+    }
+  }
+
+  /**
    * Sets the next follow-up date.
    */
   async setNextFollowUp(id: string, date: string | null): Promise<void> {

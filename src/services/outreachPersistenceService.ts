@@ -108,6 +108,12 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
       if (record) {
         // Update Prospect's lastContactedAt
         await prospectPersistenceService.updateLastContacted(record.prospectId, sentAt);
+        // Keep the pipeline stage in sync with outreach activity so the
+        // Pipeline UI (CONTACTED / FOLLOW_UP sections) reflects real sends
+        await prospectPersistenceService.advancePipelineStatusForContact(
+          record.prospectId,
+          record.type === 'FOLLOW_UP' ? 'FOLLOW_UP' : 'CONTACTED'
+        );
       }
     } catch (error) {
       logger.error(`[OutreachPersistenceService] Failed to mark outreach ${id} as SENT:`, getErrorMessage(error));
