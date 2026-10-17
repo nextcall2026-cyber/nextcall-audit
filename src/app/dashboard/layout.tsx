@@ -1,10 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/dashboard/LogoutButton";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Compass, Kanban, Settings, Camera } from "lucide-react";
+import { LayoutDashboard, Compass, Kanban, Settings, Camera, Menu } from "lucide-react";
 
 const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -14,7 +15,7 @@ const navItems = [
     { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
-function SidebarNav() {
+function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
     const pathname = usePathname() ?? "";
 
     return (
@@ -31,6 +32,7 @@ function SidebarNav() {
                         <Link
                             key={item.href}
                             href={item.href}
+                            onClick={onNavigate}
                             aria-current={isActive ? "page" : undefined}
                             className={cn(
                                 "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
@@ -55,6 +57,7 @@ export default function DashboardLayout({
     children: React.ReactNode;
 }) {
     const pathname = usePathname() ?? "";
+    const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
     const pageTitle = navItems.find((item) =>
         item.href === "/dashboard"
@@ -64,15 +67,43 @@ export default function DashboardLayout({
 
     return (
         <div className="flex min-h-screen w-full flex-col bg-muted/40">
+            {/* Desktop sidebar (sm and up) */}
             <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-col border-r bg-sidebar sm:flex">
                 <SidebarNav />
             </aside>
-            <div className="flex flex-col sm:pl-64">
-                <header className="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b bg-background px-6">
-                    <h1 className="text-base font-semibold text-foreground">{pageTitle}</h1>
+
+            {/* Mobile navigation drawer (below sm) */}
+            {isMobileNavOpen && (
+                <div className="fixed inset-0 z-40 sm:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
+                    <button
+                        type="button"
+                        aria-label="Close navigation menu"
+                        onClick={() => setIsMobileNavOpen(false)}
+                        className="absolute inset-0 h-full w-full cursor-default bg-black/40"
+                    />
+                    <aside className="absolute inset-y-0 left-0 w-64 max-w-[85vw] border-r bg-sidebar shadow-xl">
+                        <SidebarNav onNavigate={() => setIsMobileNavOpen(false)} />
+                    </aside>
+                </div>
+            )}
+
+            <div className="flex min-w-0 flex-col sm:pl-64">
+                <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b bg-background px-4 sm:px-6">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                        <button
+                            type="button"
+                            onClick={() => setIsMobileNavOpen(true)}
+                            aria-label="Open navigation menu"
+                            aria-expanded={isMobileNavOpen}
+                            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:hidden"
+                        >
+                            <Menu className="h-5 w-5" />
+                        </button>
+                        <h1 className="truncate text-base font-semibold text-foreground">{pageTitle}</h1>
+                    </div>
                     <LogoutButton />
                 </header>
-                <main className="flex flex-1 flex-col gap-4 p-6">
+                <main className="flex flex-1 flex-col gap-4 p-4 sm:p-6">
                     {children}
                 </main>
             </div>

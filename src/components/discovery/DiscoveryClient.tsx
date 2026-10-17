@@ -311,10 +311,10 @@ export default function DiscoveryClient() {
     };
 
     return (
-        <div className="flex h-[calc(100vh-8rem)] flex-col gap-4">
+        <div className="flex flex-col gap-4 lg:h-[calc(100vh-8rem)]">
             {/* Search Controls */}
             <div className="flex flex-wrap items-end gap-3">
-                <div className="flex flex-col gap-1.5">
+                <div className="flex w-full flex-col gap-1.5 sm:w-64">
                     <label className="text-xs font-medium text-muted-foreground">Business Niche</label>
                     <select
                         value={selectedNiche}
@@ -322,7 +322,7 @@ export default function DiscoveryClient() {
                             setSelectedNiche(e.target.value);
                             if (e.target.value !== "Other...") setCustomNiche("");
                         }}
-                        className="flex h-10 w-64 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                     >
                         <option value="" disabled>Select business type</option>
                         {NICHE_OPTIONS.map((opt) => (
@@ -335,23 +335,23 @@ export default function DiscoveryClient() {
                             placeholder="Describe your niche"
                             value={customNiche}
                             onChange={(e) => setCustomNiche(e.target.value)}
-                            className="mt-1.5 w-64"
+                            className="mt-1.5 w-full sm:w-auto"
                         />
                     )}
                 </div>
-                <div className="flex flex-col gap-1.5">
+                <div className="flex w-full flex-col gap-1.5 sm:w-36">
                     <label className="text-xs font-medium text-muted-foreground">Search Radius</label>
                     <select
                         value={radiusMeters}
                         onChange={(e) => setRadiusMeters(parseInt(e.target.value))}
-                        className="flex h-10 w-36 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                     >
                         {RADIUS_OPTIONS.map((opt) => (
                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                         ))}
                     </select>
                 </div>
-                <Button onClick={handleSearch} disabled={!canSearch} className="gap-2">
+                <Button onClick={handleSearch} disabled={!canSearch} className="w-full gap-2 sm:w-auto">
                     {isLoading ? (
                         <>
                             <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
@@ -367,7 +367,7 @@ export default function DiscoveryClient() {
             </div>
 
             {/* Location Info */}
-            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 {selectedCenter ? (
                     <span className="inline-flex items-center gap-1.5">
                         <MapPin className="h-3.5 w-3.5 text-primary" />
@@ -385,9 +385,9 @@ export default function DiscoveryClient() {
 
             {error && <p className="text-sm text-destructive font-medium">{error}</p>}
 
-            <div className="flex flex-1 gap-4 overflow-hidden">
-                {/* Map Section */}
-                <div className="h-full w-2/3 rounded-lg border shadow-sm">
+            <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:overflow-hidden">
+                {/* Map Section — fixed height on mobile, full height beside the list on desktop */}
+                <div className="h-72 w-full shrink-0 rounded-lg border shadow-sm sm:h-96 lg:h-full lg:w-2/3">
                     <MapView
                         businesses={businesses}
                         onBoundsChange={handleBoundsChange}
@@ -398,7 +398,7 @@ export default function DiscoveryClient() {
                 </div>
 
                 {/* Results List Section */}
-                <div className="h-full w-1/3 overflow-y-auto rounded-lg border p-4 shadow-sm">
+                <div className="w-full rounded-lg border p-4 shadow-sm lg:h-full lg:w-1/3 lg:overflow-y-auto">
                     <div className="mb-4">
                         <h3 className="text-lg font-semibold">Results ({businesses.length})</h3>
                         {businesses.length > 0 && businesses.some(b => (b.sourceProviders?.length || 1) > 1) && (

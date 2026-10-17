@@ -156,9 +156,9 @@ export default function PipelineClient() {
                     return (
                         <Link href={`/dashboard/pipeline/${p.id}`} key={p.id} className="block">
                             <Card className={`hover:shadow-md transition-shadow cursor-pointer mb-3 ${isUnread ? 'border-l-4 border-l-blue-500 bg-blue-50/30' : ''}`}>
-                            <CardContent className="p-4 flex justify-between items-center">
-                                <div className="flex flex-col">
-                                    <div className="flex items-center gap-2">
+                            <CardContent className="p-4 flex justify-between items-center gap-3">
+                                <div className="flex min-w-0 flex-col">
+                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                         <span className={`font-medium ${isUnread ? 'text-slate-900 font-bold' : 'text-slate-700'}`}>
                                             {isUnread && <span className="text-blue-500 mr-1">●</span>}
                                             {p.businessName}
@@ -199,7 +199,7 @@ export default function PipelineClient() {
                                     )}
                                 </div>
 
-                                <div className="flex items-center gap-6">
+                                <div className="flex items-center gap-3 sm:gap-6">
                                     {/* Opportunity Score */}
                                     {p.opportunityScore && (
                                         <div className="text-right hidden sm:block">

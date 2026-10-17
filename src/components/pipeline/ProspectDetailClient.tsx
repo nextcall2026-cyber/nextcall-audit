@@ -349,10 +349,10 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                         <p className="text-xs text-yellow-600 mt-2">Business data was removed from the database. Showing cached snapshot.</p>
                     )}
                 </div>
-                <div className="flex flex-col gap-2 w-48">
+                <div className="flex w-full flex-col gap-2 sm:w-48">
                     <label className="text-xs text-gray-500 uppercase tracking-wide">Pipeline Status</label>
                     <Select items={PIPELINE_STATUS_ITEMS} value={prospect.pipelineStatus} onValueChange={(v) => handleStatusChange(v as PipelineStatus)}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                         <SelectContent>
                             {PIPELINE_STATUSES.map(status => (
                                 <SelectItem key={status} value={status}>{status.replace(/_/g, " ")}</SelectItem>
@@ -829,7 +829,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                                                         o.status === "SENT" ? "bg-blue-500" : "bg-red-500"
                                                 }`}></div>
 
-                                            <div className="flex justify-between items-start">
+                                            <div className="flex flex-wrap justify-between items-start gap-2">
                                                 <span className="font-medium text-sm text-slate-800">{o.subject}</span>
                                                 <span className={`text-xs px-2 py-0.5 rounded-full ${o.deliveryStatus === 'BOUNCED' ? 'bg-red-100 text-red-800' :
                                                         o.deliveryStatus === 'DELIVERED' ? 'bg-green-100 text-green-800' :
