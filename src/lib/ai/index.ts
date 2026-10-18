@@ -3,6 +3,7 @@ import { logger } from "@/lib/logger";
 import { breaker } from "./breaker";
 import { GeminiProvider } from "./gemini";
 import { OpenAIProvider } from "./openaiProvider";
+import { OpenAICompatibleProvider } from "./openaiCompatible";
 import { LLMProvider, LLMRequest, LLMResponse, LLMUnavailableError, ProviderError, ProviderErrorKind, ProviderId } from "./types";
 
 /**
@@ -10,9 +11,11 @@ import { LLMProvider, LLMRequest, LLMResponse, LLMUnavailableError, ProviderErro
  *
  * Routing policy:
  *   1. Google Gemini is the PRIMARY provider (preferred budget).
- *   2. OpenAI is the SECONDARY provider, activated automatically whenever the
- *      primary fails for any reason — including running out of credit/quota.
- *   3. A per-provider circuit breaker parks a persistently failing provider
+ *   2. Free OpenAI-compatible fallbacks (FREE1_* / FREE2_* env vars — e.g.
+ *      Groq or OpenRouter free models) are tried next.
+ *   3. Paid OpenAI is the LAST resort, activated automatically whenever
+ *      everything before it fails.
+ *   4. A per-provider circuit breaker parks a persistently failing provider
  *      (10 min for quota/auth, 60 s for transient errors) so requests don't
  *      pay the failed provider's latency until it likely recovered.
  *
@@ -30,7 +33,15 @@ function buildProviderChain(): LLMProvider[] {
   // 1) Primary — Google Gemini
   const gemini = new GeminiProvider();
   if (gemini.isConfigured()) chain.push(gemini);
-  // 2) Secondary — OpenAI (automatic fallback)
+  // 2) Free OpenAI-compatible fallbacks (Groq / OpenRouter / any vendor) —
+  //    configured via FREE1_* and FREE2_* environment variables. They run
+  //    BEFORE the paid OpenAI fallback so free capacity absorbs failures
+  //    (e.g. Gemini "503 high demand") without burning paid credit.
+  for (const slot of [1, 2] as const) {
+    const free = new OpenAICompatibleProvider(slot);
+    if (free.isConfigured()) chain.push(free);
+  }
+  // 3) Last resort — paid OpenAI (automatic fallback)
   const openai = new OpenAIProvider();
   if (openai.isConfigured()) chain.push(openai);
   return chain;
@@ -40,6 +51,10 @@ const providerChain = buildProviderChain();
 
 const PROVIDER_DESCRIPTORS: Array<{ id: ProviderId; label: string; role: "primary" | "fallback" }> = [
   { id: "gemini", label: "Google Gemini", role: "primary" },
+  ...([1, 2] as const)
+    .map((slot) => new OpenAICompatibleProvider(slot))
+    .filter((provider) => provider.isConfigured())
+    .map((provider) => ({ id: provider.id, label: provider.label, role: "fallback" as const })),
   { id: "openai", label: "OpenAI", role: "fallback" },
 ];
 
@@ -85,7 +100,7 @@ async function attemptWithTransientRetry(provider: LLMProvider, req: LLMRequest)
 export async function generateLLMResponse(req: LLMRequest): Promise<LLMResponse> {
   if (providerChain.length === 0) {
     throw new LLMUnavailableError(
-      "No LLM provider is configured. Set GEMINI_API_KEY (primary) and/or OPENAI_API_KEY (fallback) in environment variables."
+      "No LLM provider is configured. Set GEMINI_API_KEY (primary), FREE1_BASE_URL + FREE1_ACCESS + FREE1_MODEL (free fallback, e.g. Groq) and/or OPENAI_API_KEY (last resort) in environment variables."
     );
   }
 
