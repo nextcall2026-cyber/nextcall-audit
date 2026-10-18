@@ -104,7 +104,12 @@ export async function POST(request: NextRequest) {
     logger.error("[API /extract-screenshot] Extraction failed:", message);
     const isUnconfigured = message.includes("No LLM provider is configured");
     return NextResponse.json(
-      { error: isUnconfigured ? "No AI provider is configured. Set GEMINI_API_KEY or OPENAI_API_KEY." : "Failed to extract data from screenshot." },
+      { error: isUnconfigured
+        ? "No AI provider is configured. Set GEMINI_API_KEY or OPENAI_API_KEY."
+        // Include the real cause (e.g. "All LLM providers failed. Google Gemini:
+        // 503 high demand | OpenAI: credit_balance_exhausted") so the toast
+        // tells the user WHY extraction failed.
+        : `Failed to extract data from screenshot: ${message}` },
       { status: 500 }
     );
   }
