@@ -285,7 +285,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             const res = await fetch("/api/audit", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ businessId: data.prospect.businessId, business: data.business }),
+                body: JSON.stringify({ businessId: data.prospect.businessId, business: data.business, force: true }),
             });
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({ error: "Failed to run audit" }));
@@ -903,6 +903,18 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                                     className="w-full border-amber-500 text-amber-700 hover:bg-amber-50"
                                 >
                                     {isRunningAudit ? "Running AI Audit (may take ~30s)..." : "Run AI Audit First"}
+                                </Button>
+                            )}
+
+                            {aiReport && (
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={handleRunAudit}
+                                    disabled={isRunningAudit}
+                                    className="text-slate-500 hover:text-slate-700"
+                                >
+                                    {isRunningAudit ? "Re-running Audit..." : "Re-run Audit (uses your notes)"}
                                 </Button>
                             )}
 

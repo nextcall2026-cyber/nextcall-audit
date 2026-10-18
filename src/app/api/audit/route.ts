@@ -3,15 +3,19 @@ import { z } from "zod";
 import { persistenceService } from "@/services/persistenceService";
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { auditEngine } from "@/services/auditService";
+import { prospectPersistenceService } from "@/services/prospectPersistenceService";
+import { mergeNotesIntoEnrichment, parseBusinessNotes } from "@/services/notesParser";
 import { aiReportService } from "@/services/aiReportService";
 import { logger } from "@/lib/logger";
 import { priorityService } from "@/services/priorityService";
+import { EnrichmentData } from "@/types";
 import { rateLimit } from "@/lib/rateLimiter";
 
 import { getErrorMessage } from "@/lib/errors";
 const AuditRequestSchema = z.object({
   businessId: z.string().min(1, "Business ID is required"),
   business: z.any().optional(),
+  force: z.boolean().optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -32,7 +36,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { businessId } = parsed.data;
+    const { businessId, force } = parsed.data;
 
     // 1. Load Business from DB
     let business = await persistenceService.getBusinessById(businessId);
@@ -51,6 +55,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 1b. Owner notes: free-text notes on the pipeline prospect are
+    // user-verified signals. Parse and merge them into the enrichment data
+    // exactly like the screenshot flow does, so the audit and the AI report
+    // credit emails/socials/booking/contact channels the crawl missed.
+    const prospect = await prospectPersistenceService.getProspectByBusinessId(businessId);
+    const ownerNotes = (prospect?.notes || [])
+      .map((n) => n.text)
+      .join("\n")
+      .trim();
+
+    if (ownerNotes) {
+      const parsedNotes = parseBusinessNotes(ownerNotes);
+      const baseEnrichment: EnrichmentData = business.enrichment ?? { status: "NOT_STARTED" };
+      const mergedEnrichment = mergeNotesIntoEnrichment(baseEnrichment, parsedNotes);
+
+      if (JSON.stringify(mergedEnrichment) !== JSON.stringify(baseEnrichment)) {
+        await persistenceService.updateEnrichmentData(businessId, mergedEnrichment);
+        logger.info(`[API /audit] Merged owner notes into enrichment for ${businessId}.`);
+      }
+
+      // The merged clone (with raw notes attached) feeds both the
+      // deterministic audit and the AI report below.
+      business = { ...business, enrichment: mergedEnrichment, notes: ownerNotes };
+    }
+
     const thirtyDaysMs = 2592000000;
 
     let latestAuditRecord =
@@ -59,8 +88,10 @@ export async function POST(request: NextRequest) {
     let needsAuditRecalc = false;
     let needsAiReport = false;
 
-    // 2. Check if deterministic audit is missing or older than 30 days
+    // 2. Check if a recalc is forced, the deterministic audit is missing, or
+    // it is older than 30 days
     if (
+      force ||
       !latestAuditRecord ||
       Date.now() -
         new Date(latestAuditRecord.createdAt).getTime() >

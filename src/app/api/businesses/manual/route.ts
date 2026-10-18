@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import { Business, EnrichmentData } from "@/types";
+import { Business } from "@/types";
 import { persistenceService } from "@/services/persistenceService";
 import { enrichmentService } from "@/services/enrichmentService";
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { auditEngine } from "@/services/auditService";
 import { aiReportService } from "@/services/aiReportService";
 import { priorityService } from "@/services/priorityService";
-import { parseBusinessNotes, ParsedNotes } from "@/services/notesParser";
+import { mergeNotesIntoEnrichment, parseBusinessNotes } from "@/services/notesParser";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 
@@ -42,38 +42,9 @@ function normalizeWebsite(input: string | null | undefined): string | null {
  * result AFTER the website crawl, so anything the user verified manually
  * (socials, booking, email) is scored by the audit even if the crawl
  * missed it. Crawl findings are never overwritten.
+ * (Implementation lives in notesParser.ts so the /api/audit pipeline can
+ * apply the exact same merge to prospect notes.)
  */
-function mergeNotesIntoEnrichment(
-  enrichment: EnrichmentData,
-  parsed: ParsedNotes
-): EnrichmentData {
-  const merged: EnrichmentData = { ...enrichment };
-
-  if (parsed.socialProfiles.length > 0) {
-    const existing = enrichment.socialProfiles || [];
-    const seen = new Set(existing.map((s) => s.url));
-    const added = parsed.socialProfiles.filter((s) => !seen.has(s.url));
-    if (added.length > 0) {
-      merged.socialProfiles = [...existing, ...added];
-    }
-  }
-
-  if (parsed.emails.length > 0) {
-    const existing = enrichment.emails || [];
-    const seen = new Set(existing.map((e) => e.address));
-    const added = parsed.emails.filter((e) => !seen.has(e.address));
-    if (added.length > 0) {
-      merged.emails = [...existing, ...added];
-    }
-    merged.preferredEmail = merged.preferredEmail || parsed.emails[0].address;
-  }
-
-  if (parsed.booking && !enrichment.booking?.detected) {
-    merged.booking = parsed.booking;
-  }
-
-  return merged;
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -118,6 +89,9 @@ export async function POST(request: NextRequest) {
       providerIds: { manual: id },
       status: "active",
       sources: ["MANUAL"],
+      // Raw notes are stored so the AI report prompt can quote them as
+      // owner-verified context.
+      notes: d.notes || undefined,
       enrichment: d.email
         ? {
             status: "NOT_STARTED",

@@ -125,6 +125,7 @@ export interface Business {
   metadata?: Record<string, unknown>;
   
   enrichment?: EnrichmentData;
+  notes?: string;
   
   sources: string[];
 

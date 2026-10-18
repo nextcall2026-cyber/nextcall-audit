@@ -108,6 +108,8 @@ Instead use careful language such as:
 
 Never turn an absence of evidence into proof of absence. Prefer "not detected" / "unable to verify" over "does not exist".
 
+OWNER-PROVIDED CONTEXT (when present in the input) contains facts the NextCall user verified manually with the business. Treat it as verified ground truth: never contradict it, and never say "we did not detect X" about something the owner context explicitly states — build on it instead.
+
 ==================================================
 TONE AND VOICE
 ==================================================
@@ -165,6 +167,9 @@ SOCIAL PROFILES FOUND:
 
 BOOKING SYSTEM DETECTED:
  ${business.enrichment?.booking?.detected ? `Yes\n- System: ${business.enrichment.booking.systemName}\n- URL: ${business.enrichment.booking.url || "URL not provided"}` : "No"}
+
+OWNER-PROVIDED CONTEXT (verified manually by the NextCall user — treat as ground truth):
+ ${business.notes ? `"""${business.notes}"""` : "- None provided"}
 
 DETERMINISTIC AUDIT RESULT:
 - Overall Score: ${audit.overallScore}/100

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseBusinessNotes } from "../notesParser";
+import { parseBusinessNotes, mergeNotesIntoEnrichment } from "../notesParser";
+import { EnrichmentData } from "@/types";
 
 describe("parseBusinessNotes", () => {
   it("extracts social profiles with platform and normalized URL", () => {
@@ -90,5 +91,68 @@ describe("parseBusinessNotes", () => {
   it("does not detect booking when the note explicitly says there is none", () => {
     const parsed = parseBusinessNotes("no booking system, no book online button");
     expect(parsed.booking).toBeNull();
+  });
+
+  it("flags a contact channel when the note mentions a contact form or section", () => {
+    expect(parseBusinessNotes("separate contact us section is available").mentionsContactForm).toBe(true);
+    expect(parseBusinessNotes("they have a contact form on the site").mentionsContactForm).toBe(true);
+    expect(parseBusinessNotes("great staff, quick service").mentionsContactForm).toBe(false);
+  });
+});
+
+describe("mergeNotesIntoEnrichment", () => {
+  const baseEnrichment = (overrides: Partial<EnrichmentData> = {}): EnrichmentData => ({
+    status: "COMPLETED",
+    features: { hasContactForm: false, hasLiveChat: false, hasClickToCall: false, hasSecureSSL: true },
+    ...overrides,
+  });
+
+  it("adds note emails, fills preferredEmail and keeps crawl emails", () => {
+    const merged = mergeNotesIntoEnrichment(
+      baseEnrichment({
+        emails: [{ address: "crawl@biz.com", type: "UNKNOWN", sourceUrl: "crawl", sourceType: "MAILTO", confidence: 80 }],
+      }),
+      parseBusinessNotes("email us at info@biz.com")
+    );
+    expect(merged.emails!.map((e) => e.address)).toEqual(["crawl@biz.com", "info@biz.com"]);
+    expect(merged.preferredEmail).toBe("info@biz.com");
+  });
+
+  it("fills booking from notes but never overwrites a crawl-detected system", () => {
+    const crawled = baseEnrichment({ booking: { detected: true, systemName: "Calendly", url: "https://calendly.com/biz" } });
+    expect(mergeNotesIntoEnrichment(crawled, parseBusinessNotes("books via booksy.com/biz")).booking?.systemName).toBe("Calendly");
+
+    const noBooking = baseEnrichment();
+    expect(mergeNotesIntoEnrichment(noBooking, parseBusinessNotes("books via booksy.com/biz")).booking?.systemName).toBe("Booksy");
+  });
+
+  it("upgrades hasContactForm to true when notes mention a contact section", () => {
+    const merged = mergeNotesIntoEnrichment(
+      baseEnrichment(),
+      parseBusinessNotes("separate contact us section is available")
+    );
+    expect(merged.features?.hasContactForm).toBe(true);
+    // crawl data is preserved
+    expect(merged.features?.hasSecureSSL).toBe(true);
+  });
+
+  it("keeps multiple keyword-only social profiles (no url-collision dedupe)", () => {
+    const merged = mergeNotesIntoEnrichment(
+      baseEnrichment(),
+      parseBusinessNotes("they have a Facebook page and Instagram")
+    );
+    expect(merged.socialProfiles!.map((s) => s.platform)).toEqual(["facebook", "instagram"]);
+  });
+
+  it("fills phones only when the crawl found none", () => {
+    const noPhones = mergeNotesIntoEnrichment(baseEnrichment(), parseBusinessNotes("call (512) 555-0123"));
+    expect(noPhones.phones).toHaveLength(1);
+
+    const withPhones = mergeNotesIntoEnrichment(
+      baseEnrichment({ phones: [{ number: "+15559999999", normalized: "+15559999999", sourceUrl: "crawl", sourceType: "TEL_LINK", confidence: 95 }] }),
+      parseBusinessNotes("call (512) 555-0123")
+    );
+    expect(withPhones.phones).toHaveLength(1);
+    expect(withPhones.phones![0].normalized).toBe("+15559999999");
   });
 });

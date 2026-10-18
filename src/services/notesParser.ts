@@ -11,7 +11,7 @@
  * crawl missed but the user verified manually.
  */
 
-import { BookingData, EmailData, SocialProfile } from "@/types";
+import { BookingData, EmailData, EnrichmentData, SocialProfile } from "@/types";
 
 const URL_RE = /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)(\/[^\s]*)?/g;
 const EMAIL_RE = /[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}/g;
@@ -74,12 +74,18 @@ const SOCIAL_KEYWORD_RE =
 const NO_SOCIAL_RE =
   /\b(?:no|without|doesn'?t|does\s+not|don'?t|not)\b[^.\n]{0,40}\b(?:facebook|instagram|insta|linkedin|tiktok|youtube|twitter)\b/gi;
 
+// "separate contact us section", "they have a contact form", "contact page"
+// — the owner verified a reachable contact channel on the website.
+// No /g flag: test() on a global regex keeps lastIndex state between calls.
+const CONTACT_FORM_RE = /\bcontact\s+(?:form|us|page|section)\b/i;
+
 export interface ParsedNotes {
   socialProfiles: SocialProfile[];
   booking: BookingData | null;
   emails: EmailData[];
   phone: string | null;
   website: string | null;
+  mentionsContactForm: boolean;
 }
 
 function normalizeUrl(raw: string): string {
@@ -219,5 +225,72 @@ export function parseBusinessNotes(notes: string): ParsedNotes {
   // Generic website = first URL that is not social, booking or email
   const website: string | null = genericUrls[0] ?? null;
 
-  return { socialProfiles, booking, emails, phone, website };
+  return { socialProfiles, booking, emails, phone, website, mentionsContactForm: CONTACT_FORM_RE.test(notes) };
+}
+
+/**
+ * Merges user-verified signals from free-text notes into an enrichment
+ * result, so anything the user confirmed manually (socials, booking, email,
+ * phone, contact section) is scored by the audit even if the website crawl
+ * missed it. Crawl findings are NEVER overwritten — notes only fill gaps
+ * and upgrade "not found" / "unknown" to "user verified".
+ */
+export function mergeNotesIntoEnrichment(
+  enrichment: EnrichmentData,
+  parsed: ParsedNotes
+): EnrichmentData {
+  const merged: EnrichmentData = { ...enrichment };
+
+  if (parsed.socialProfiles.length > 0) {
+    const existing = enrichment.socialProfiles || [];
+    const seenUrls = new Set(existing.map((s) => s.url));
+    const seenKeywordPlatforms = new Set(
+      existing.filter((s) => !s.url).map((s) => s.platform)
+    );
+    const added = parsed.socialProfiles.filter(
+      (s) => !seenUrls.has(s.url) && !(s.url === "" && seenKeywordPlatforms.has(s.platform))
+    );
+    if (added.length > 0) {
+      merged.socialProfiles = [...existing, ...added];
+    }
+  }
+
+  if (parsed.emails.length > 0) {
+    const existing = enrichment.emails || [];
+    const seen = new Set(existing.map((e) => e.address));
+    const added = parsed.emails.filter((e) => !seen.has(e.address));
+    if (added.length > 0) {
+      merged.emails = [...existing, ...added];
+    }
+    merged.preferredEmail = merged.preferredEmail || parsed.emails[0].address;
+  }
+
+  if (parsed.booking && !enrichment.booking?.detected) {
+    merged.booking = parsed.booking;
+  }
+
+  if (parsed.phone && !(enrichment.phones && enrichment.phones.length > 0)) {
+    merged.phones = [
+      {
+        number: parsed.phone,
+        normalized: parsed.phone,
+        sourceUrl: "user provided",
+        sourceType: "VISIBLE_TEXT",
+        confidence: 90,
+      },
+    ];
+  }
+
+  // "contact form" / "contact us section" in the notes: the owner verified a
+  // reachable contact channel, so upgrade a missing/unknown form signal.
+  if (parsed.mentionsContactForm && enrichment.features?.hasContactForm !== true) {
+    merged.features = {
+      hasContactForm: true,
+      hasLiveChat: enrichment.features?.hasLiveChat ?? "UNKNOWN",
+      hasClickToCall: enrichment.features?.hasClickToCall ?? "UNKNOWN",
+      hasSecureSSL: enrichment.features?.hasSecureSSL ?? "UNKNOWN",
+    };
+  }
+
+  return merged;
 }
