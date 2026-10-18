@@ -4,6 +4,7 @@ import { persistenceService } from "@/services/persistenceService";
 import { prospectPersistenceService } from "@/services/prospectPersistenceService";
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { opportunityService } from "@/services/opportunityService";
+import { parseBusinessNotes } from "@/services/notesParser";
 import { PipelineStatus } from "@/types";
 import { logger } from "@/lib/logger";
 
@@ -40,9 +41,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Determine best contact email from enrichment data
+    // Determine best contact email: the user-verified preferred address
+    // first, then any discovered email, then an address stated in the
+    // business notes (e.g. entered during the screenshot flow).
     const contactEmail =
-      business.enrichment?.emails?.[0]?.address || null;
+      business.enrichment?.preferredEmail ||
+      business.enrichment?.emails?.[0]?.address ||
+      (business.notes ? parseBusinessNotes(business.notes).emails[0]?.address : null) ||
+      null;
 
     // Calculate Opportunity Score at add time
     const opportunityScore = opportunityService.calculateScore(business);

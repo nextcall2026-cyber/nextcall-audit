@@ -113,11 +113,40 @@ export async function POST(request: NextRequest) {
     await persistenceService.upsertBusiness(business);
 
     // 2. Run enrichment (crawls the website when one was provided), then merge
-    //    any user-verified signals from the notes box on top of the crawl data.
+    //    the user-verified signals on top of the crawl data. enrichBusiness
+    //    builds a fresh enrichment object from the crawl, so the email typed
+    //    in the dedicated Email field must be re-applied here — otherwise it
+    //    is lost before the prospect (and its Contact Email) is created.
     const enrichmentData = await enrichmentService.enrichBusiness(business);
-    const mergedEnrichment = notesItem
-      ? mergeNotesIntoEnrichment(enrichmentData, notesItem)
-      : enrichmentData;
+    const userEmail = d.email ? d.email.toLowerCase() : null;
+    const parsedFromNotes = notesItem ?? {
+      socialProfiles: [],
+      booking: null,
+      emails: [],
+      phone: null,
+      website: null,
+      mentionsContactForm: false,
+    };
+    const parsedWithUserEmail = userEmail
+      ? {
+          ...parsedFromNotes,
+          emails: [
+            {
+              address: userEmail,
+              type: "BUSINESS" as const,
+              sourceUrl: "user provided",
+              sourceType: "VISIBLE_TEXT" as const,
+              confidence: 100,
+            },
+            ...parsedFromNotes.emails.filter((e) => e.address !== userEmail),
+          ],
+        }
+      : parsedFromNotes;
+    const mergedEnrichment = mergeNotesIntoEnrichment(enrichmentData, parsedWithUserEmail);
+    // The explicitly typed address outranks anything the crawl guessed.
+    if (userEmail) {
+      mergedEnrichment.preferredEmail = userEmail;
+    }
     await persistenceService.updateEnrichmentData(id, mergedEnrichment);
     const enrichedBusiness: Business = { ...business, enrichment: mergedEnrichment };
 
