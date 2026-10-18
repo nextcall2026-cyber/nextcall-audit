@@ -10,9 +10,11 @@ import { LLMProvider, LLMRequest, LLMResponse, LLMUnavailableError, ProviderErro
  * LLM gateway — the single entry point every AI feature in this app uses.
  *
  * Routing policy:
- *   1. Google Gemini is the PRIMARY provider (preferred budget).
- *   2. Free OpenAI-compatible fallbacks (FREE1_* / FREE2_* env vars — e.g.
- *      Groq or OpenRouter free models) are tried next.
+ *   1. xAI Grok keys are tried FIRST (FREE1_* / FREE2_* / FREE3_* env vars —
+ *      one slot per key). When a key hits its limit, the circuit breaker parks
+ *      it and the next key takes over automatically.
+ *   2. Google Gemini (free tier) is the late fallback — its shared capacity
+ *      produces intermittent 503s, so it no longer leads the chain.
  *   3. Paid OpenAI is the LAST resort, activated automatically whenever
  *      everything before it fails.
  *   4. A per-provider circuit breaker parks a persistently failing provider
@@ -30,17 +32,16 @@ export * from "./types";
 
 function buildProviderChain(): LLMProvider[] {
   const chain: LLMProvider[] = [];
-  // 1) Primary — Google Gemini
-  const gemini = new GeminiProvider();
-  if (gemini.isConfigured()) chain.push(gemini);
-  // 2) Free OpenAI-compatible fallbacks (Groq / OpenRouter / any vendor) —
-  //    configured via FREE1_* and FREE2_* environment variables. They run
-  //    BEFORE the paid OpenAI fallback so free capacity absorbs failures
-  //    (e.g. Gemini "503 high demand") without burning paid credit.
-  for (const slot of [1, 2] as const) {
+  // 1) xAI Grok keys first (FREE1_* / FREE2_* / FREE3_* — one slot per key).
+  //    When a key hits its limit the circuit breaker parks it and the next
+  //    slot takes over automatically.
+  for (const slot of [1, 2, 3] as const) {
     const free = new OpenAICompatibleProvider(slot);
     if (free.isConfigured()) chain.push(free);
   }
+  // 2) Google Gemini — free but capacity-limited (intermittent 503s).
+  const gemini = new GeminiProvider();
+  if (gemini.isConfigured()) chain.push(gemini);
   // 3) Last resort — paid OpenAI (automatic fallback)
   const openai = new OpenAIProvider();
   if (openai.isConfigured()) chain.push(openai);
@@ -49,13 +50,13 @@ function buildProviderChain(): LLMProvider[] {
 
 const providerChain = buildProviderChain();
 
-const PROVIDER_DESCRIPTORS: Array<{ id: ProviderId; label: string; role: "primary" | "fallback" }> = [
-  { id: "gemini", label: "Google Gemini", role: "primary" },
-  ...([1, 2] as const)
+const PROVIDER_DESCRIPTORS: Array<{ id: ProviderId; label: string }> = [
+  ...([1, 2, 3] as const)
     .map((slot) => new OpenAICompatibleProvider(slot))
     .filter((provider) => provider.isConfigured())
-    .map((provider) => ({ id: provider.id, label: provider.label, role: "fallback" as const })),
-  { id: "openai", label: "OpenAI", role: "fallback" },
+    .map((provider) => ({ id: provider.id, label: provider.label })),
+  { id: "gemini", label: "Google Gemini" },
+  { id: "openai", label: "OpenAI" },
 ];
 
 /** Transient spikes (e.g. "high demand" 503s) usually clear within seconds —
@@ -100,7 +101,7 @@ async function attemptWithTransientRetry(provider: LLMProvider, req: LLMRequest)
 export async function generateLLMResponse(req: LLMRequest): Promise<LLMResponse> {
   if (providerChain.length === 0) {
     throw new LLMUnavailableError(
-      "No LLM provider is configured. Set GEMINI_API_KEY (primary), FREE1_BASE_URL + FREE1_ACCESS + FREE1_MODEL (free fallback, e.g. Groq) and/or OPENAI_API_KEY (last resort) in environment variables."
+      "No LLM provider is configured. Set FREE1_BASE_URL + FREE1_ACCESS + FREE1_MODEL (any OpenAI-compatible vendor, e.g. xAI Grok at https://api.x.ai/v1), GEMINI_API_KEY and/or OPENAI_API_KEY in environment variables."
     );
   }
 
@@ -160,11 +161,12 @@ export interface LLMProviderStatus {
 export function getLLMStatus(): LLMProviderStatus[] {
   return PROVIDER_DESCRIPTORS.map((descriptor) => {
     const active = providerChain.find((provider) => provider.id === descriptor.id);
+    const position = providerChain.findIndex((provider) => provider.id === descriptor.id);
     const snap = breaker.snapshot(descriptor.id);
     return {
       id: descriptor.id,
       label: descriptor.label,
-      role: descriptor.role,
+      role: position === 0 ? "primary" : "fallback",
       configured: Boolean(active),
       model: active?.model ?? null,
       circuit: snap.isOpen ? "open" : "closed",

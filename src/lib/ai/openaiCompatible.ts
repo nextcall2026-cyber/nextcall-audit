@@ -2,19 +2,22 @@ import "server-only";
 import { LLMProvider, LLMRequest, ProviderError, ProviderErrorKind, ProviderId } from "./types";
 
 /**
- * Generic OpenAI-compatible provider — one class, two slots.
+ * Generic OpenAI-compatible provider — one class, three slots.
  *
- * Lets the gateway fall back to FREE LLM capacity (Groq, OpenRouter, or any
- * other OpenAI-compatible endpoint) without a code change per vendor. Each
- * slot is configured entirely through environment variables:
+ * Lets the gateway rotate through multiple vendor keys / free endpoints
+ * without a code change per vendor. Each slot is configured entirely through
+ * environment variables:
  *
- *   FREE1_BASE_URL=https://api.groq.com/openai/v1
+ *   FREE1_BASE_URL=https://api.x.ai/v1
  *   FREE1_ACCESS=<the vendor access key>
- *   FREE1_MODEL=llama-3.3-70b-versatile
+ *   FREE1_MODEL=grok-4.7
  *
- *   FREE2_BASE_URL=https://openrouter.ai/api/v1
- *   FREE2_ACCESS=<the vendor access key>
- *   FREE2_MODEL=<a ":free" model id from openrouter.ai/models>
+ *   FREE2_BASE_URL=https://api.x.ai/v1
+ *   FREE2_ACCESS=<second key>
+ *   FREE2_MODEL=grok-4.7
+ *
+ * When one key hits its limit, the gateway's circuit breaker parks it and the
+ * next slot (or Gemini) serves the request automatically.
  *
  * A slot is active only when all three values are present. Env vars are read
  * directly (not through lib/env.ts) so adding a vendor never requires a
@@ -26,6 +29,7 @@ import { LLMProvider, LLMRequest, ProviderError, ProviderErrorKind, ProviderId }
 const SLOT_ENV = {
   1: { baseUrl: "FREE1_BASE_URL", access: "FREE1_ACCESS", model: "FREE1_MODEL" },
   2: { baseUrl: "FREE2_BASE_URL", access: "FREE2_ACCESS", model: "FREE2_MODEL" },
+  3: { baseUrl: "FREE3_BASE_URL", access: "FREE3_ACCESS", model: "FREE3_MODEL" },
 } as const;
 
 function readEnv(name: string): string {
@@ -70,12 +74,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private readonly baseUrl: string;
   private readonly access: string;
 
-  constructor(slot: 1 | 2) {
+  constructor(slot: 1 | 2 | 3) {
     const names = SLOT_ENV[slot];
     this.baseUrl = readEnv(names.baseUrl).replace(/\/+$/, "");
     this.access = readEnv(names.access);
     this.model = readEnv(names.model);
-    this.id = slot === 1 ? "free1" : "free2";
+    this.id = slot === 1 ? "free1" : slot === 2 ? "free2" : "free3";
     this.label = `Free LLM ${slot}${this.baseUrl ? ` (${hostOf(this.baseUrl)})` : ""}`;
   }
 
