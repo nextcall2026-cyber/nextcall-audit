@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/dashboard/LogoutButton";
+import { ToastProvider } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { LayoutDashboard, Compass, Kanban, Settings, Camera, Menu } from "lucide-react";
 
@@ -66,6 +67,7 @@ export default function DashboardLayout({
     )?.label || "Dashboard";
 
     return (
+        <ToastProvider>
         <div className="flex min-h-screen w-full flex-col bg-muted/40">
             {/* Desktop sidebar (sm and up) */}
             <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-col border-r bg-sidebar sm:flex">
@@ -108,5 +110,6 @@ export default function DashboardLayout({
                 </main>
             </div>
         </div>
+        </ToastProvider>
     );
 }

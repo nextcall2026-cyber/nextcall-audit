@@ -216,7 +216,7 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
 
     } catch (error) {
       logger.error(`[AIReportService] Failed to generate report: ${getErrorMessage(error)}`);
-      throw new Error("Failed to generate AI audit report.");
+      throw new Error(`Failed to generate AI audit report: ${getErrorMessage(error)}`);
     }
   }
 }

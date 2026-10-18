@@ -9,6 +9,7 @@ import { logger } from "@/lib/logger";
 import Link from "next/link";
 
 import { getErrorMessage } from "@/lib/errors";
+import { useToast } from "@/components/ui/toast";
 interface EnrichedProspect extends Prospect {
     businessName: string;
     auditScore: number | null;
@@ -43,6 +44,7 @@ const getOppColor = (score: OpportunityScore | null | undefined) => {
 };
 
 export default function PipelineClient() {
+    const toast = useToast();
     const [prospects, setProspects] = useState<EnrichedProspect[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [activeFilter, setActiveFilter] = useState<"DUE" | "EMAILED" | PipelineStatus | "ALL">("ALL");
@@ -58,6 +60,7 @@ export default function PipelineClient() {
                 const data = await response.json();
                 setProspects(data.prospects);
             } catch (err) {
+                toast.error("Could not load pipeline", getErrorMessage(err));
                 logger.error("[PipelineClient] Fetch failed:", getErrorMessage(err));
             } finally {
                 setIsLoading(false);
@@ -65,7 +68,7 @@ export default function PipelineClient() {
         };
 
         fetchProspects();
-    }, [activeFilter]);
+    }, [activeFilter, toast]);
 
     const getScoreColor = (score: number | null) => {
         if (score === null) return "text-gray-400";
@@ -94,10 +97,11 @@ export default function PipelineClient() {
                 throw new Error(data.error || "Delete failed");
             }
             setProspects(prev => prev.filter(p => p.id !== prospect.id));
+            toast.success(`${prospect.businessName} removed from pipeline`);
         } catch (err: unknown) {
             const message = err instanceof Error ? getErrorMessage(err) : String(err);
+            toast.error("Delete failed", message);
             logger.error("[PipelineClient] Delete failed:", message);
-            window.alert(`Delete failed: ${message}`);
         }
     };
 

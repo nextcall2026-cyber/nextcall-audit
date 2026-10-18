@@ -123,7 +123,9 @@ export async function POST(request: NextRequest) {
       needsAiReport = true;
     }
 
-    // 5. Run AI Report if needed
+    // 5. Run AI Report if needed (a failure is surfaced to the client as a
+    // `warning` field — the deterministic audit is still returned)
+    let aiWarning: string | null = null;
     if (needsAiReport && latestAuditRecord) {
       logger.info(
         `[API /audit] Generating AI report for ${businessId}`
@@ -148,6 +150,8 @@ export async function POST(request: NextRequest) {
           `[API /audit] AI Report generation failed for ${businessId}: ${getErrorMessage(aiError)}`
         );
 
+        aiWarning = `AI report generation failed: ${getErrorMessage(aiError)}. The deterministic audit is shown — try Re-run Audit later.`;
+
         // Don't throw here, so the user still gets
         // the deterministic audit even if AI fails
       }
@@ -160,6 +164,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       audit: latestAuditRecord?.audit,
       aiReport: latestAuditRecord?.aiReport,
+      warning: aiWarning,
     });
   } catch (error) {
     logger.error(

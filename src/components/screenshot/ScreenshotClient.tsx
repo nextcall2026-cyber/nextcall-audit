@@ -15,6 +15,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { logger } from "@/lib/logger";
+import { useToast } from "@/components/ui/toast";
 import { AuditResult, AuditReport, AuditCategoryName } from "@/types";
 
 interface ExtractedFields {
@@ -46,6 +47,7 @@ const getScoreColor = (score: number) => {
 };
 
 export default function ScreenshotClient() {
+  const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -142,6 +144,7 @@ export default function ScreenshotClient() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
+      toast.error("Extraction failed", message);
       logger.error("[ScreenshotClient] Extraction failed:", message);
     } finally {
       setExtracting(false);
@@ -179,6 +182,11 @@ export default function ScreenshotClient() {
         throw new Error(details || data.error || "Failed to create business");
       }
 
+      if (data.warning) {
+        toast.warning("AI report failed", data.warning);
+      } else {
+        toast.success("Business created & audited");
+      }
       setResult({
         businessId: data.businessId,
         businessName: data.business.name,
@@ -188,6 +196,7 @@ export default function ScreenshotClient() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
+      toast.error("Could not create business", message);
       logger.error("[ScreenshotClient] Create + audit failed:", message);
     } finally {
       setCreating(false);
@@ -220,6 +229,7 @@ export default function ScreenshotClient() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setError(`PDF Download failed: ${message}`);
+      toast.error("PDF download failed", message);
       logger.error("[ScreenshotClient] PDF download failed:", message);
     } finally {
       setDownloadingPdf(false);
@@ -241,9 +251,11 @@ export default function ScreenshotClient() {
         throw new Error(errData.error || "Failed to add to pipeline");
       }
       setInPipeline(true);
+      toast.success("Added to pipeline");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setError(`Pipeline Error: ${message}`);
+      toast.error("Could not add to pipeline", message);
       logger.error("[ScreenshotClient] Add to pipeline failed:", message);
     } finally {
       setAddingToPipeline(false);

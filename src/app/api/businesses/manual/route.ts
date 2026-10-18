@@ -158,12 +158,14 @@ export async function POST(request: NextRequest) {
     }
 
     let aiReport = null;
+    let aiWarning: string | null = null;
     try {
       aiReport = await aiReportService.generateAuditReport(enrichedBusiness, auditResult);
       await auditPersistenceService.saveAIReport(auditRecord.id, aiReport);
     } catch (aiError: unknown) {
       const message = aiError instanceof Error ? aiError.message : String(aiError);
       logger.error(`[API /businesses/manual] AI report failed for ${id}: ${message}`);
+      aiWarning = `AI report generation failed: ${message}. The business and deterministic audit were created — you can Re-run Audit later.`;
     }
 
     // 4. Recalculate opportunity priority from the fresh audit
@@ -176,6 +178,7 @@ export async function POST(request: NextRequest) {
       business: enrichedBusiness,
       audit: auditResult,
       aiReport,
+      warning: aiWarning,
     });
   } catch (error) {
     logger.error("[API /businesses/manual] Manual business creation failed:", getErrorMessage(error));

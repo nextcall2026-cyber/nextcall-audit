@@ -56,6 +56,6 @@ export async function POST(request: NextRequest) {
     if (error instanceof ValidationError) {
       return NextResponse.json({ error: getErrorMessage(error) }, { status: 400 });
     }
-    return NextResponse.json({ error: "Failed to generate follow-up draft." }, { status: 500 });
+    return NextResponse.json({ error: `Failed to generate follow-up draft: ${getErrorMessage(error)}` }, { status: 500 });
   }
 }

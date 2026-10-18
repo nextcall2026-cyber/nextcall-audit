@@ -13,6 +13,7 @@ import Link from "next/link";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 
 import { getErrorMessage } from "@/lib/errors";
+import { useToast } from "@/components/ui/toast";
 interface ProspectDetailData {
     prospect: Prospect;
     business: Business;
@@ -48,6 +49,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
     const [isSendingInitial, setIsSendingInitial] = useState(false);
     const [isRunningAudit, setIsRunningAudit] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
+    const toast = useToast();
 
     // Pure fetch without setState, so the mount effect can call it without
     // triggering react-hooks/set-state-in-effect (state updates happen in
@@ -120,6 +122,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             });
             setData({ ...data, prospect: { ...data.prospect, pipelineStatus: newStatus } });
         } catch (err) {
+            toast.error("Status update failed", getErrorMessage(err));
             logger.error("[ProspectDetail] Status update failed:", getErrorMessage(err));
         }
     };
@@ -136,7 +139,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             const updatedProspect = (await res.json()).prospect;
             setData({ ...data, prospect: updatedProspect });
             setNoteText("");
+            toast.success("Note added");
         } catch (err) {
+            toast.error("Could not add note", getErrorMessage(err));
             logger.error("[ProspectDetail] Add note failed:", getErrorMessage(err));
         }
     };
@@ -153,7 +158,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                 body: JSON.stringify({ isSuppressed: true, suppressionReason: reason || "MANUAL_DNC" }),
             });
             await fetchDetails();
+            toast.success("Prospect suppressed", reason ? `Reason: ${reason}` : undefined);
         } catch (err) {
+            toast.error("Could not update suppression", getErrorMessage(err));
             logger.error("[ProspectDetail] Suppress failed:", getErrorMessage(err));
         }
     };
@@ -173,7 +180,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             }
             const data = await res.json();
             setDraft(data.draft);
+            toast.success("Follow-up draft ready", "Review it, then send.");
         } catch (err) {
+            toast.error("Draft generation failed", getErrorMessage(err));
             setActionError(getErrorMessage(err));
             logger.error("[ProspectDetail] Draft generation failed:", getErrorMessage(err));
         } finally {
@@ -206,7 +215,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
 
             setDraft(null);
             await fetchDetails();
+            toast.success("Follow-up sent");
         } catch (err) {
+            toast.error("Follow-up failed", getErrorMessage(err));
             setActionError(getErrorMessage(err));
             logger.error("[ProspectDetail] Send follow-up failed:", getErrorMessage(err));
         } finally {
@@ -240,7 +251,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                 throw new Error(errData.error || "Failed to send initial email");
             }
             await fetchDetails();
+            toast.success("Initial audit email sent");
         } catch (err) {
+            toast.error("Email send failed", getErrorMessage(err));
             setActionError(getErrorMessage(err));
             logger.error("[ProspectDetail] Send initial failed:", getErrorMessage(err));
         } finally {
@@ -269,7 +282,9 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             }
             const updatedProspect = (await res.json()).prospect;
             setData({ ...data, prospect: updatedProspect });
+            toast.success("Email saved");
         } catch (err) {
+            toast.error("Could not save email", getErrorMessage(err));
             setActionError(getErrorMessage(err));
             logger.error("[ProspectDetail] Save email failed:", getErrorMessage(err));
         } finally {
@@ -293,10 +308,18 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             }
             const result = await res.json();
             if (!result.aiReport) {
-                throw new Error("AI report generation failed. Check the AI provider configuration.");
+                // Deterministic audit still succeeded — surface the AI failure
+                // as a visible warning instead of a thrown error.
+                toast.warning(
+                    "Audit updated without an AI report",
+                    result.warning || "The AI provider did not respond. Try Re-run Audit later."
+                );
+            } else {
+                toast.success("Audit updated", "The AI report was regenerated with your latest data.");
             }
             await fetchDetails();
         } catch (err) {
+            toast.error("Audit failed", getErrorMessage(err));
             setActionError(getErrorMessage(err));
             logger.error("[ProspectDetail] Run audit failed:", getErrorMessage(err));
         } finally {

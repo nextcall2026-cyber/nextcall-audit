@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Download, Plus, Check, MapPin, Search } from "lucide-react";
 import { logger } from "@/lib/logger";
+import { useToast } from "@/components/ui/toast";
 
 import { getErrorMessage } from "@/lib/errors";
 const MapView = dynamic(() => import("./MapView"), {
@@ -98,6 +99,7 @@ function loadFromSession(): DiscoverySessionState | null {
 }
 
 export default function DiscoveryClient() {
+    const toast = useToast();
     const [selectedNiche, setSelectedNiche] = useState("");
     const [customNiche, setCustomNiche] = useState("");
     const [bounds, setBounds] = useState<BoundingBox | null>(null);
@@ -199,6 +201,7 @@ export default function DiscoveryClient() {
             setPipelineStatuses({});
         } catch (err) {
             setError(getErrorMessage(err));
+            toast.error("Search failed", getErrorMessage(err));
             logger.error("[DiscoveryClient] Search failed:", getErrorMessage(err));
         } finally {
             setIsLoading(false);
@@ -222,6 +225,7 @@ export default function DiscoveryClient() {
             setBusinesses(prev => prev.map(b => b.id === business.id ? data.business : b));
         } catch (err) {
             setError(getErrorMessage(err));
+            toast.error("Enrichment failed", getErrorMessage(err));
             logger.error("[DiscoveryClient] Enrichment failed:", getErrorMessage(err));
         } finally {
             setEnrichingId(null);
@@ -242,7 +246,13 @@ export default function DiscoveryClient() {
             setBusinesses(prev => prev.map(b =>
                 b.id === business.id ? { ...b, audit: data.audit, aiReport: data.aiReport } : b
             ));
+            if (data.warning) {
+                toast.warning("Audit ran without an AI report", data.warning);
+            } else {
+                toast.success("AI audit complete");
+            }
         } catch (err) {
+            toast.error("Audit failed", getErrorMessage(err));
             logger.error("[DiscoveryClient] Audit failed:", getErrorMessage(err));
         } finally {
             setAuditingId(null);
@@ -278,6 +288,7 @@ export default function DiscoveryClient() {
 
         } catch (err) {
             setError(`PDF Download failed: ${getErrorMessage(err)}`);
+            toast.error("PDF download failed", getErrorMessage(err));
             logger.error("[DiscoveryClient] PDF Download failed:", getErrorMessage(err));
         } finally {
             setDownloadingPdfId(null);
@@ -301,9 +312,11 @@ export default function DiscoveryClient() {
             }
 
             setPipelineStatuses(prev => ({ ...prev, [businessId]: true }));
-
+            const added = businesses.find(b => b.id === businessId);
+            toast.success(`${added?.name || "Business"} added to pipeline`);
         } catch (err) {
             setError(`Pipeline Error: ${getErrorMessage(err)}`);
+            toast.error("Could not add to pipeline", getErrorMessage(err));
             logger.error("[DiscoveryClient] Add to pipeline failed:", getErrorMessage(err));
         } finally {
             setAddingToPipelineId(null);
