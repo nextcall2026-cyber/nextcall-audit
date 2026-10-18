@@ -3,6 +3,9 @@ import { randomUUID } from "crypto";
 import { z } from "zod";
 import { Business } from "@/types";
 import { persistenceService } from "@/services/persistenceService";
+import { prospectPersistenceService } from "@/services/prospectPersistenceService";
+import { outreachPersistenceService } from "@/services/outreachPersistenceService";
+import { getBusinessesCollection } from "@/lib/db";
 import { enrichmentService } from "@/services/enrichmentService";
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { auditEngine } from "@/services/auditService";
@@ -27,6 +30,7 @@ const ManualBusinessSchema = z.object({
   category: z.string().trim().optional().nullable(),
   email: z.string().trim().email("Invalid email address").optional().nullable(),
   notes: z.string().trim().optional().nullable(),
+  force: z.boolean().optional(),
 });
 
 function normalizeWebsite(input: string | null | undefined): string | null {
@@ -35,6 +39,62 @@ function normalizeWebsite(input: string | null | undefined): string | null {
   if (!trimmed) return null;
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return `https://${trimmed}`;
   return trimmed;
+}
+
+function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function domainOf(url: string): string | null {
+  try {
+    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url) ? url : `https://${url}`;
+    return new URL(withScheme).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+function businessHasEmail(business: Business, email: string | null): boolean {
+  if (!email) return false;
+  const known = [
+    business.enrichment?.preferredEmail,
+    ...(business.enrichment?.emails ?? []).map((e) => e.address),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.toLowerCase());
+  return known.includes(email);
+}
+
+/**
+ * Duplicate guard: one business should exist only once. Matches an incoming
+ * screenshot entry against stored businesses by website domain, normalized
+ * name ("Deal's Plumbing" == "Deals Plumbing"), or the provided email.
+ * Fails open (returns null) if the lookup itself errors, so creation is
+ * never blocked by an infrastructure hiccup.
+ */
+async function findDuplicateBusiness(
+  candidate: { name: string; website: string | null; email: string | null }
+): Promise<Business | null> {
+  try {
+    const collection = await getBusinessesCollection();
+    const docs = (await collection.find({}).toArray()) as unknown as Business[];
+    const candidateDomain = candidate.website ? domainOf(candidate.website) : null;
+    const candidateName = normalizeName(candidate.name);
+    return (
+      docs.find((business) => {
+        if (candidateDomain) {
+          const businessDomain = business.website ? domainOf(business.website) : null;
+          if (businessDomain && businessDomain === candidateDomain) return true;
+        }
+        if (candidateName.length >= 4 && business.name && normalizeName(business.name) === candidateName) return true;
+        if (businessHasEmail(business, candidate.email)) return true;
+        return false;
+      }) ?? null
+    );
+  } catch (error) {
+    logger.warn(`[API /businesses/manual] Duplicate check skipped: ${getErrorMessage(error)}`);
+    return null;
+  }
 }
 
 /**
@@ -67,6 +127,45 @@ export async function POST(request: NextRequest) {
     const notesItem = d.notes ? parseBusinessNotes(d.notes) : null;
     // A website pasted in the notes can still feed the crawl if the field was empty
     const website = normalizeWebsite(d.website) ?? notesItem?.website ?? null;
+
+    // 1b. Duplicate guard — block accidental re-creation of a business that
+    // already exists (and may already have been emailed). The client can
+    // retry with force:true after the user explicitly confirms.
+    if (!d.force) {
+      const duplicate = await findDuplicateBusiness({
+        name: d.name,
+        website,
+        email: d.email?.toLowerCase() ?? null,
+      });
+      if (duplicate) {
+        const existingProspect = await prospectPersistenceService.getProspectByBusinessId(duplicate.id);
+        let emailCount = 0;
+        let lastEmailSentAt: string | null = null;
+        if (existingProspect) {
+          const sentHistory = (await outreachPersistenceService.getOutreachHistory(existingProspect.id)).filter(
+            (record) => record.status === "SENT"
+          );
+          emailCount = sentHistory.length;
+          lastEmailSentAt = sentHistory.map((record) => record.sentAt).sort().at(-1) ?? null;
+        }
+        logger.info(`[API /businesses/manual] Duplicate blocked for "${d.name}" (existing business ${duplicate.id}).`);
+        return NextResponse.json(
+          {
+            duplicate: true,
+            match: {
+              businessId: duplicate.id,
+              name: duplicate.name,
+              prospectId: existingProspect?.id ?? null,
+              emailCount,
+              lastEmailSentAt,
+              suppressed: existingProspect?.isSuppressed ?? false,
+            },
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     const hasLocationPart = Boolean(d.address || d.city || d.state || d.zip || d.country);
 
     const business: Business = {

@@ -34,6 +34,24 @@ export class OutreachPersistenceService {
   }
 
   /**
+   * Finds a SENT outreach email previously delivered to an exact recipient
+   * address. Backs the "one business, one email" send-time guard.
+   */
+  async findSentToRecipient(recipient: string): Promise<OutreachRecord | null> {
+    try {
+      const collection = await getOutreachCollection();
+      const doc = await collection.findOne({ recipient, status: "SENT" });
+      return (doc as unknown as OutreachRecord) ?? null;
+    } catch (error) {
+      logger.error(
+        `[OutreachPersistenceService] Error finding sent record for ${recipient}:`,
+        getErrorMessage(error)
+      );
+      return null;
+    }
+  }
+
+  /**
    * Creates a new outreach record with PENDING status before sending the email.
    * Updated to include body and type.
    */

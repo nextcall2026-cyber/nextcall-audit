@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,6 +19,15 @@ import {
 import { logger } from "@/lib/logger";
 import { useToast } from "@/components/ui/toast";
 import { AuditResult, AuditReport, AuditCategoryName } from "@/types";
+
+interface DuplicateMatch {
+  businessId: string;
+  name: string;
+  prospectId: string | null;
+  emailCount: number;
+  lastEmailSentAt: string | null;
+  suppressed: boolean;
+}
 
 interface ExtractedFields {
   name: string;
@@ -48,7 +59,9 @@ const getScoreColor = (score: number) => {
 
 export default function ScreenshotClient() {
   const toast = useToast();
+  const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [duplicate, setDuplicate] = useState<DuplicateMatch | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
@@ -85,6 +98,7 @@ export default function ScreenshotClient() {
     setMissing([]);
     setInPipeline(false);
     setNotes("");
+    setDuplicate(null);
     setSelectedFile(file);
     if (previewUrl) window.URL.revokeObjectURL(previewUrl);
     setPreviewUrl(window.URL.createObjectURL(file));
@@ -151,7 +165,7 @@ export default function ScreenshotClient() {
     }
   };
 
-  const handleCreate = async () => {
+  const handleCreate = async (force = false) => {
     if (!fields.name.trim()) {
       setError("Business name is required.");
       return;
@@ -159,7 +173,7 @@ export default function ScreenshotClient() {
     setCreating(true);
     setError(null);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: fields.name.trim(),
         phone: fields.phone.trim() || null,
         website: fields.website.trim() || null,
@@ -170,6 +184,7 @@ export default function ScreenshotClient() {
         email: fields.email.trim() || null,
         notes: notes.trim() || null,
       };
+      if (force) payload.force = true;
 
       const response = await fetch("/api/businesses/manual", {
         method: "POST",
@@ -177,11 +192,20 @@ export default function ScreenshotClient() {
         body: JSON.stringify(payload),
       });
       const data = await response.json();
+      if (response.status === 409 && data.duplicate) {
+        setDuplicate(data.match as DuplicateMatch);
+        toast.warning(
+          "Possible duplicate business",
+          `"${data.match.name}" already exists${data.match.emailCount > 0 ? ` — ${data.match.emailCount} email(s) already sent to it` : ""}.`
+        );
+        return;
+      }
       if (!response.ok) {
         const details = data.details?.map((d: { message?: string }) => d.message).join(", ");
         throw new Error(details || data.error || "Failed to create business");
       }
 
+      setDuplicate(null);
       if (data.warning) {
         toast.warning("AI report failed", data.warning);
       } else {
@@ -201,6 +225,35 @@ export default function ScreenshotClient() {
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleAddExistingToPipeline = async () => {
+    if (!duplicate) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/prospects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId: duplicate.businessId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to add to pipeline");
+      toast.success("Existing business added to pipeline");
+      router.push(`/dashboard/pipeline/${data.prospect.id}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      toast.error("Could not add to pipeline", message);
+      logger.error("[ScreenshotClient] Add existing to pipeline failed:", message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleCreateAnyway = async () => {
+    setDuplicate(null);
+    await handleCreate(true);
   };
 
   const handleDownloadPdf = async () => {
@@ -409,8 +462,37 @@ export default function ScreenshotClient() {
               </span>
             </div>
 
+            {duplicate && (
+              <div className="mt-5 rounded-md border border-amber-300 bg-amber-50 p-3">
+                <p className="text-xs font-semibold text-amber-800">
+                  ⚠ Possible duplicate: &quot;{duplicate.name}&quot; already exists
+                </p>
+                <p className="mt-1 text-xs text-amber-700">
+                  In pipeline: {duplicate.prospectId ? "yes" : "no"} · Emails already sent: {duplicate.emailCount}
+                  {duplicate.lastEmailSentAt ? ` · Last sent: ${new Date(duplicate.lastEmailSentAt).toLocaleDateString()}` : ""}
+                  {duplicate.suppressed ? " · Suppressed (do not contact)" : ""}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {duplicate.prospectId ? (
+                    <Link href={`/dashboard/pipeline/${duplicate.prospectId}`}>
+                      <Button size="sm" variant="outline" className="border-amber-500 text-amber-700">
+                        Open existing prospect
+                      </Button>
+                    </Link>
+                  ) : (
+                    <Button size="sm" variant="outline" onClick={handleAddExistingToPipeline} disabled={creating}>
+                      Add existing business to pipeline
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={handleCreateAnyway} disabled={creating} className="text-slate-500">
+                    Create duplicate anyway
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <div className="mt-4 flex flex-wrap items-center gap-3">
-              <Button onClick={handleCreate} disabled={creating} className="gap-2">
+              <Button onClick={() => handleCreate(false)} disabled={creating} className="gap-2">
                 {creating ? (
                   <>
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />

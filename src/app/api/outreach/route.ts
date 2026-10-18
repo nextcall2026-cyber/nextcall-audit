@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prospectPersistenceService } from "@/services/prospectPersistenceService";
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
+import { persistenceService } from "@/services/persistenceService";
 import { emailService } from "@/services/emailService";
 import { EmailAttachment } from "@/services/emailProvider";
 import { outreachSafetyService } from "@/services/outreachSafetyService";
@@ -37,6 +38,25 @@ export async function POST(request: NextRequest) {
     const prospect = await prospectPersistenceService.getProspectById(prospectId);
     if (!prospect) throw new ValidationError("Prospect not found.");
 
+    // 1b. One-business-one-email guard: if this exact address already received
+    // a SENT outreach email (e.g. from a duplicate prospect created through
+    // the screenshot flow), block the send here.
+    if (prospect.contactEmail) {
+      const prior = await outreachPersistenceService.findSentToRecipient(prospect.contactEmail);
+      if (prior) {
+        const priorProspect = await prospectPersistenceService.getProspectById(prior.prospectId);
+        let priorName = prior.prospectId.slice(0, 8);
+        if (priorProspect) {
+          const priorBusiness = await persistenceService.getBusinessById(priorProspect.businessId);
+          priorName = priorBusiness?.name || priorName;
+        }
+        return NextResponse.json(
+          { error: `One business, one email: "${priorName}" already received an outreach email on ${new Date(prior.sentAt).toLocaleDateString()}. This address will not be emailed again.` },
+          { status: 409 }
+        );
+      }
+    }
+
     // 2. Pre-Send Safety Validation (Checks suppression, state, email validity)
     try {
       outreachSafetyService.validateSend(prospect, 0); // 0 = Initial stage
@@ -51,7 +71,6 @@ export async function POST(request: NextRequest) {
     }
 
     // 4. Fetch Business Name (Using persistenceService directly as in Phase 5 code)
-    const { persistenceService } = await import("@/services/persistenceService");
     const business = await persistenceService.getBusinessById(prospect.businessId);
     if (!business) throw new ValidationError("Business not found.");
     const businessName = business.name || "your business";
