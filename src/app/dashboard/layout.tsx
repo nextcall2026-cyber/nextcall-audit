@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useSyncExternalStore, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/dashboard/LogoutButton";
 import { ToastProvider } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Compass, Kanban, Settings, Camera, Menu } from "lucide-react";
+import { LayoutDashboard, Compass, Kanban, Settings, Camera, Menu, PanelLeft } from "lucide-react";
 
 const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -15,6 +15,39 @@ const navItems = [
     { href: "/dashboard/pipeline", label: "Pipeline", icon: Kanban },
     { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
+
+/* Desktop sidebar collapse state, persisted in localStorage. Using
+ * useSyncExternalStore keeps hydration safe (server renders it expanded)
+ * without a setState-in-effect. */
+const SIDEBAR_STORAGE_KEY = "nextcall_sidebar_collapsed";
+const SIDEBAR_CHANGE_EVENT = "nextcall-sidebar-change";
+
+function subscribeSidebar(callback: () => void) {
+    window.addEventListener(SIDEBAR_CHANGE_EVENT, callback);
+    window.addEventListener("storage", callback);
+    return () => {
+        window.removeEventListener(SIDEBAR_CHANGE_EVENT, callback);
+        window.removeEventListener("storage", callback);
+    };
+}
+
+function getSidebarCollapsed(): boolean {
+    try {
+        return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1";
+    } catch {
+        return false;
+    }
+}
+
+function toggleSidebarCollapsed() {
+    try {
+        const next = window.localStorage.getItem(SIDEBAR_STORAGE_KEY) !== "1";
+        window.localStorage.setItem(SIDEBAR_STORAGE_KEY, next ? "1" : "0");
+        window.dispatchEvent(new Event(SIDEBAR_CHANGE_EVENT));
+    } catch {
+        // storage unavailable — collapse simply won't persist
+    }
+}
 
 function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
     const pathname = usePathname() ?? "";
@@ -59,6 +92,11 @@ export default function DashboardLayout({
 }) {
     const pathname = usePathname() ?? "";
     const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+    const isSidebarCollapsed = useSyncExternalStore(
+        subscribeSidebar,
+        getSidebarCollapsed,
+        () => false
+    );
 
     const pageTitle = navItems.find((item) =>
         item.href === "/dashboard"
@@ -69,10 +107,12 @@ export default function DashboardLayout({
     return (
         <ToastProvider>
         <div className="flex min-h-screen w-full flex-col bg-muted/40">
-            {/* Desktop sidebar (sm and up) */}
-            <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-col border-r bg-sidebar sm:flex">
-                <SidebarNav />
-            </aside>
+            {/* Desktop sidebar (sm and up) — collapsible */}
+            {!isSidebarCollapsed && (
+                <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-col border-r bg-sidebar sm:flex">
+                    <SidebarNav />
+                </aside>
+            )}
 
             {/* Mobile navigation drawer (below sm) */}
             {isMobileNavOpen && (
@@ -89,7 +129,7 @@ export default function DashboardLayout({
                 </div>
             )}
 
-            <div className="flex min-w-0 flex-col sm:pl-64">
+            <div className={cn("flex min-w-0 flex-col transition-[padding] duration-200", isSidebarCollapsed ? "sm:pl-0" : "sm:pl-64")}>
                 <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b bg-background px-4 sm:px-6">
                     <div className="flex min-w-0 items-center gap-1.5">
                         <button
@@ -100,6 +140,16 @@ export default function DashboardLayout({
                             className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:hidden"
                         >
                             <Menu className="h-5 w-5" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={toggleSidebarCollapsed}
+                            aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                            aria-expanded={!isSidebarCollapsed}
+                            title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                            className="hidden rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:inline-flex"
+                        >
+                            <PanelLeft className="h-5 w-5" />
                         </button>
                         <h1 className="truncate text-base font-semibold text-foreground">{pageTitle}</h1>
                     </div>

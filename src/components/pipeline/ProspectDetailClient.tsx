@@ -355,11 +355,13 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
     return (
         <div className="flex flex-col gap-6 p-4 sm:px-6 sm:py-6">
 
-            {/* Back Button */}
-            <Link href="/dashboard/pipeline" className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 hover:underline w-fit">
-                <ArrowLeft className="h-4 w-4" />
-                Back to Pipeline
-            </Link>
+            {/* Sticky back bar — stays visible while scrolling the long audit page */}
+            <div className="sticky top-14 z-20 -mx-4 flex items-center border-b border-border/60 bg-background/85 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6">
+                <Link href="/dashboard/pipeline" className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 hover:underline w-fit">
+                    <ArrowLeft className="h-4 w-4" />
+                    Back to Pipeline
+                </Link>
+            </div>
 
             {/* Header Section */}
             <div className="flex flex-wrap justify-between items-start gap-4 border-b pb-4">
@@ -389,6 +391,44 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
 
                 {/* Left Column */}
                 <div className="lg:col-span-2 flex flex-col gap-6">
+
+                    {/* Audit Card — always at the top so the freshest audit is the first thing you see */}
+                    {audit && (
+                        <Card>
+                            <CardHeader><CardTitle className="text-sm">Digital Presence Audit</CardTitle></CardHeader>
+                            <CardContent>
+                                <div className="flex justify-between items-center mb-4">
+                                    <span className="text-4xl font-bold text-blue-600">{audit.overallScore}<span className="text-lg text-gray-400">/100</span></span>
+                                    <div className="flex flex-col items-end gap-1">
+                                        <span className="text-xs px-2 py-1 bg-gray-100 rounded-full">{audit.confidence} Confidence</span>
+                                        <span className={`text-xs px-2 py-1 rounded-full font-medium ${prospect.isSuppressed ? 'bg-red-100 text-red-800' : 'bg-purple-100 text-purple-800'}`}>
+                                            {prospect.isSuppressed ? `Suppressed: ${prospect.suppressionReason}` : `Outreach: ${prospect.outreachState.replace(/_/g, " ")}`}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2 text-xs mb-4">
+                                    {(Object.keys(audit.categoryScores) as Array<keyof typeof audit.categoryScores>).map(cat => (
+                                        <div key={cat} className="flex justify-between bg-gray-50 px-2 py-1 rounded">
+                                            <span className="capitalize text-gray-600">{cat.toLowerCase()}</span>
+                                            <span className={`font-medium ${audit.categoryScores[cat].score >= 75 ? 'text-green-600' : audit.categoryScores[cat].score >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>
+                                                {audit.categoryScores[cat].score}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {aiReport && (
+                                    <div className="space-y-3 text-sm mt-4 pt-4 border-t">
+                                        <div>
+                                            <h4 className="font-semibold text-slate-800 text-xs uppercase mb-1">Executive Summary</h4>
+                                            <p className="text-gray-600 whitespace-pre-wrap">{aiReport.executiveSummary}</p>
+                                        </div>
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    )}
 
                     {/* Lead Opportunity Score Card */}
                     {oppScore && (
@@ -799,45 +839,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                         </CardContent>
                     </Card>
 
-                    {/* Audit Card */}
-                    {audit && (
-                        <Card>
-                            <CardHeader><CardTitle className="text-sm">Digital Presence Audit</CardTitle></CardHeader>
-                            <CardContent>
-                                <div className="flex justify-between items-center mb-4">
-                                    <span className="text-4xl font-bold text-blue-600">{audit.overallScore}<span className="text-lg text-gray-400">/100</span></span>
-                                    <div className="flex flex-col items-end gap-1">
-                                        <span className="text-xs px-2 py-1 bg-gray-100 rounded-full">{audit.confidence} Confidence</span>
-                                        <span className={`text-xs px-2 py-1 rounded-full font-medium ${prospect.isSuppressed ? 'bg-red-100 text-red-800' : 'bg-purple-100 text-purple-800'}`}>
-                                            {prospect.isSuppressed ? `Suppressed: ${prospect.suppressionReason}` : `Outreach: ${prospect.outreachState.replace(/_/g, " ")}`}
-                                        </span>
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-2 text-xs mb-4">
-                                    {(Object.keys(audit.categoryScores) as Array<keyof typeof audit.categoryScores>).map(cat => (
-                                        <div key={cat} className="flex justify-between bg-gray-50 px-2 py-1 rounded">
-                                            <span className="capitalize text-gray-600">{cat.toLowerCase()}</span>
-                                            <span className={`font-medium ${audit.categoryScores[cat].score >= 75 ? 'text-green-600' : audit.categoryScores[cat].score >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>
-                                                {audit.categoryScores[cat].score}
-                                            </span>
-                                        </div>
-                                    ))}
-                                </div>
-
-                                {aiReport && (
-                                    <div className="space-y-3 text-sm mt-4 pt-4 border-t">
-                                        <div>
-                                            <h4 className="font-semibold text-slate-800 text-xs uppercase mb-1">Executive Summary</h4>
-                                            <p className="text-gray-600 whitespace-pre-wrap">{aiReport.executiveSummary}</p>
-                                        </div>
-                                    </div>
-                                )}
-                            </CardContent>
-                        </Card>
-                    )}
-
-                    {/* Outreach Timeline */}
+                    {/* Outreach Timeline — newest sent email first, oldest at the bottom */}
                     <Card>
                         <CardHeader><CardTitle className="text-sm">Outreach Timeline</CardTitle></CardHeader>
                         <CardContent>
