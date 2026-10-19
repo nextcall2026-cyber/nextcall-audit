@@ -118,7 +118,6 @@ export class FollowUpAutomationService {
     if (!business) return false;
 
     const storedAudit = await auditPersistenceService.getLatestAudit(prospect.businessId);
-    const aiReport = storedAudit?.aiReport || null;
     const history = await outreachPersistenceService.getOutreachHistory(prospectId);
 
     // AI-generated draft with a plain-text fallback if generation fails
@@ -126,7 +125,7 @@ export class FollowUpAutomationService {
     try {
       draft = await aiFollowupService.generateFollowUpDraft(
         business,
-        aiReport,
+        storedAudit,
         history,
         stage as OutreachStage
       );

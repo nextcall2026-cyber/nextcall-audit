@@ -2,7 +2,7 @@ import "server-only";
 
 import {
   Business,
-  AuditReport,
+  StoredAudit,
   OutreachRecord,
   FollowUpDraft,
   OutreachStage,
@@ -29,10 +29,17 @@ const FollowUpSchema = z.object({
   angle: z.string().min(5, "Angle must be descriptive"),
 });
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export class AIFollowupService {
   async generateFollowUpDraft(
     business: Business,
-    auditReport: AuditReport | null,
+    storedAudit: StoredAudit | null,
     previousOutreach: OutreachRecord[],
     currentStage: OutreachStage
   ): Promise<FollowUpDraft> {
@@ -40,9 +47,13 @@ export class AIFollowupService {
       `[AIFollowupService] Generating follow-up Stage ${currentStage} for ${business.name}...`
     );
 
-    // 1. Determine Sequence Strategy & Angle based on explicit stage
+    // ------------------------------------------------------------------
+    // 1. Sequence strategy: what this stage is for, its CTA options, and
+    //    how long the draft may be (later stages get progressively shorter).
+    // ------------------------------------------------------------------
     let sequenceAngle = "";
     let callToActionOptions = "";
+    let stageWordLimit = 110;
 
     if (currentStage === 1) {
       sequenceAngle =
@@ -59,89 +70,213 @@ export class AIFollowupService {
         "Follow-up #3: Short, low-pressure final check-in. Keep it very brief.";
       callToActionOptions =
         "Ask a simple, low-friction question like 'Is this something you're exploring this quarter?'. (Use ctaType: ASK_QUICK_QUESTION or OPEN_ENDED_REPLY)";
+      stageWordLimit = 70;
     } else {
       sequenceAngle =
         "Breakup Email (Stage 4): Polite close-the-loop. Assume they are busy and might have missed the previous emails. Leave the door open for the future.";
       callToActionOptions =
         "State that you'll close the loop for now but will be available if they decide to explore this in the future. (Use ctaType: CLOSE_LOOP)";
+      stageWordLimit = 60;
     }
 
-    // 2. Extract Used & Available Opportunities
-    const usedAngles = previousOutreach
-      .filter((o) => o.status === "SENT" && o.angle)
-      .map((o) => o.angle!.toLowerCase());
+    // ------------------------------------------------------------------
+    // 2. Anti-repetition: every previously used angle, subject, and opening
+    //    phrase becomes forbidden text for this draft.
+    //    Substring matching, so "Audit finding: Appointment Scheduling"
+    //    from the initial email also blocks the plain
+    //    "Appointment Scheduling" — the old exact-match check missed that.
+    // ------------------------------------------------------------------
+    const sent = previousOutreach.filter((o) => o.status === "SENT");
+    const usedText = [
+      ...sent.filter((o) => o.angle).map((o) => o.angle!.toLowerCase()),
+      ...sent.map((o) => o.subject.toLowerCase()),
+    ].join(" | ");
 
-    const allOpportunities = auditReport?.opportunities || [];
+    const allOpportunities = storedAudit?.aiReport?.opportunities || [];
     const availableOpportunities = allOpportunities.filter(
-      (opp) => !usedAngles.includes(opp.toLowerCase())
+      (opp) => !usedText.includes(opp.toLowerCase())
     );
 
     const opportunityContext =
       availableOpportunities.length > 0
         ? availableOpportunities.map((o) => `- ${o}`).join("\n")
-        : "No new specific opportunities left. Focus on general NextCall benefits (24/7 lead capture, appointment scheduling). Use angle: 'General Benefit'.";
+        : "- None left — every specific opportunity was already used in previous emails. Choose angle 'General Benefit' and tie it to this business's category and situation.";
 
-    // 3. Construct Prompts
+    // ------------------------------------------------------------------
+    // 3. Personalization dossier: everything the app already knows about
+    //    this business, so the draft can open with a detail that is only
+    //    true for THEM. All fields are optional-safe ("Unknown" when absent).
+    // ------------------------------------------------------------------
+    const audit = storedAudit?.audit ?? null;
+
+    const location =
+      [business.location?.city, business.location?.state]
+        .filter(Boolean)
+        .join(", ") || "Unknown";
+    const categories =
+      business.categories?.filter(Boolean).join(", ") || "Unknown";
+    const rating =
+      business.rating != null
+        ? `${business.rating}/5${
+            business.reviewCount ? ` across ${business.reviewCount} reviews` : ""
+          }`
+        : "Unknown";
+    const websiteUrl =
+      business.enrichment?.website?.url || business.website || null;
+    const websiteLine = websiteUrl
+      ? `${websiteUrl}${
+          business.enrichment?.website?.isReachable === false
+            ? " (could not be reached at audit time)"
+            : ""
+        }`
+      : "None found";
+
+    const booking = business.enrichment?.booking;
+    const bookingLine = !booking
+      ? "Not verified"
+      : booking.detected
+      ? `Detected${booking.systemName ? ` (${booking.systemName})` : ""}`
+      : "No publicly detectable online booking";
+
+    const socials =
+      business.enrichment?.socialProfiles?.map((s) => s.platform).join(", ") ||
+      "None found";
+
+    const features = business.enrichment?.features;
+    const featureBits: string[] = [];
+    if (features?.hasContactForm === true) featureBits.push("contact form");
+    if (features?.hasClickToCall === true) featureBits.push("click-to-call");
+    if (features?.hasLiveChat === true) featureBits.push("live chat");
+    const featuresLine =
+      featureBits.length > 0
+        ? featureBits.join(", ")
+        : "none of the standard website features were clearly detected";
+
+    const notesLine = business.notes?.trim()
+      ? `"${business.notes.trim().slice(0, 600)}"`
+      : "None";
+
+    const overallScore = audit
+      ? `${audit.overallScore}/100 (confidence: ${audit.confidence})`
+      : "No audit available";
+
+    const weakestCategories = audit
+      ? Object.entries(audit.categoryScores)
+          .sort((a, b) => a[1].score - b[1].score)
+          .slice(0, 2)
+          .map(([name, s]) => `${name} (${s.score}/100)`)
+          .join(", ")
+      : "Unknown";
+
+    const findingLines =
+      (audit?.findings ?? [])
+        .filter((f) => f.type !== "STRENGTH")
+        .slice(0, 4)
+        .map((f) => `- [${f.category}] ${f.title} — ${f.evidence}`)
+        .join("\n") || "- None recorded";
+
+    const strengthLines =
+      (audit?.findings ?? [])
+        .filter((f) => f.type === "STRENGTH")
+        .slice(0, 3)
+        .map((f) => `- [${f.category}] ${f.title} — ${f.evidence}`)
+        .join("\n") || "- None recorded";
+
+    const historyBlock =
+      sent.length > 0
+        ? sent
+            .map((email, i) => {
+              const opening = email.body
+                ? `\n  Opening: "${stripHtml(email.body).slice(0, 160)}"`
+                : "";
+              return `- Email ${i + 1} (${
+                email.type === "INITIAL"
+                  ? "initial audit email"
+                  : `follow-up stage ${email.sequenceStage}`
+              })\n  Subject: "${email.subject}"\n  Angle used: ${
+                email.angle || "None"
+              }${opening}`;
+            })
+            .join("\n")
+        : "- None";
+
+    // ------------------------------------------------------------------
+    // 4. Prompts
+    // ------------------------------------------------------------------
     const systemPrompt = `
-You are an expert B2B sales assistant writing a follow-up email for the NextCall AI voice receptionist.
+You write follow-up emails for NextCall, an AI voice receptionist for local service businesses. You write as one human consultant speaking in the first person ("I") — never as a marketing department.
 
-Your goal is to write a brief, polite, and highly personalized follow-up based on the specific sequence stage.
+THE ONE GOAL
+The email must feel like it was written by someone who actually looked at THIS business before hitting send. A follow-up that could have been sent to anyone gets deleted; one that could only have been written for them gets replies.
 
-CRITICAL RULES:
-1. Do NOT repeat the initial audit. Keep it brief (2-3 short paragraphs).
-2. Do NOT invent facts, ratings, or features. Use only the provided context.
-3. Do NOT use manipulative urgency or claim they are "missing calls" or "losing money."
-4. Do NOT use generic subject lines like "Following Up", "Just Checking In", or "Quick Question". Make the subject natural and relevant to the business or the specific value point.
-5. You MUST select ONE angle/opportunity from the "Available Opportunities" list provided. Do not use an angle that was already used in previous emails.
-6. Avoid repeating the exact same phrasing from previous emails. Vary your approach.
-7. Maintain a professional, warm, and non-pushy tone.
-8. Use the provided Context to ground your statements.
-9. Return ONLY valid JSON matching this structure:
+HOW TO PERSONALIZE (in priority order)
+1. Open with ONE concrete detail from the business context or audit data: their rating or review count, their booking setup, their category or city, or a specific audit finding. Never open with the follow-up itself — "I'm following up" is an instant delete.
+2. Build forward from the audit they already received. Do NOT re-explain the audit, re-list its findings, or repeat the initial email's structure.
+3. When you reference a gap, use evidence-aware wording: "I noticed", "I didn't see", "no publicly detectable", "the audit flagged". Never "you don't have", and never claims about lost customers, missed calls, or lost money — the audit never proved those.
 
+HARD RULES
+1. Use ONLY facts present in the provided context. Never invent ratings, tools, services, hours, or outcomes.
+2. Length: at most ${stageWordLimit} words in the body (excluding the sign-off), two short paragraphs maximum.
+3. Never reuse any subject, angle, or opening phrase that appears under PREVIOUS OUTREACH. Vary sentence rhythm and paragraph shape.
+4. Banned phrases: "I hope this email finds you well", "just checking in", "following up", "circling back", "touching base", "as a valued", "quick question" in subjects, urgency or scarcity of any kind, emoji, exclamation marks.
+5. Subject: 3-7 words, natural and specific to the angle you chose. It should sound like a person, not a campaign.
+6. Tone: professional, warm, human, confident. Short sentences are fine.
+7. Pick exactly ONE angle from AVAILABLE OPPORTUNITIES that was not used before. If none remain, use angle "General Benefit".
+8. The "ctaType" must be one of the exact enum values listed in the stage's Call to Action options.
+9. End the body with a simple sign-off on separate lines:
+Best regards,
+The NextCall Team
+10. Body is plain text with \\n\\n line breaks (no HTML, no Markdown).
+
+Return ONLY valid JSON matching exactly:
 {
   "subject": "string",
   "body": "string",
   "ctaType": "string",
   "angle": "string"
 }
-
-The body should be plain text with line breaks (\\n\\n), not HTML.
-The "angle" must be the exact title of the opportunity you chose, or "General Benefit" if none are available.
-The "ctaType" must be one of the exact enum values provided in the Call to Action options.
+The "angle" must be the exact title of the opportunity you chose, or "General Benefit".
 `;
 
     const userPrompt = `
-BUSINESS CONTEXT (Use this for personalization):
+BUSINESS CONTEXT (verified data about THIS business):
 - Name: ${business.name}
-- Category: ${business.categories?.[0] || "Unknown"}
+- Category: ${categories}
+- Location: ${location}
+- Rating: ${rating}
+- Website: ${websiteLine}
+- Online booking: ${bookingLine}
+- Website features: ${featuresLine}
+- Social profiles: ${socials}
+- Owner-provided notes (verified by the NextCall user — treat as ground truth): ${notesLine}
 
-AVAILABLE OPPORTUNITIES (Choose ONE for your angle):
+AUDIT CONTEXT (the audit this business already received):
+- Overall score: ${overallScore}
+- Weakest categories: ${weakestCategories}
+- Key findings:
+${findingLines}
+- Verified strengths:
+${strengthLines}
+
+AVAILABLE OPPORTUNITIES (choose ONE angle from this list):
  ${opportunityContext}
 
+PREVIOUS OUTREACH (never repeat any subject, angle, or opening phrase from these):
+ ${historyBlock}
+
 SEQUENCE STRATEGY:
-- Current Stage: ${sequenceAngle}
+- Current stage: ${sequenceAngle}
 - Call to Action: You must select one of these types for the "ctaType" field: ${callToActionOptions}
 
-PREVIOUS OUTREACH CONTEXT (To avoid repetition):
- ${previousOutreach
-  .filter((o) => o.status === "SENT")
-  .map(
-    (email, i) =>
-      `- Email ${i + 1} Subject: ${email.subject}\n- Angle Used: ${
-        email.angle || "None"
-      }`
-  )
-  .join("\n\n")}
-
-Please write the follow-up email draft for Stage ${currentStage}.
+Write the Stage ${currentStage} follow-up email draft now.
 `;
 
     try {
       const llm = await generateLLMResponse({
         system: systemPrompt,
         user: userPrompt,
-        temperature: 0.7,
-        maxOutputTokens: 500,
+        temperature: 0.65,
+        maxOutputTokens: 700,
         json: true,
         thinking: "off",
       });

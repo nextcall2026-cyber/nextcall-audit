@@ -41,13 +41,12 @@ export async function POST(request: NextRequest) {
     if (!business) throw new ValidationError("Business not found.");
 
     const storedAudit = await auditPersistenceService.getLatestAudit(prospect.businessId);
-    const aiReport = storedAudit?.aiReport || null;
 
     // 4. Fetch Previous Outreach History
     const history = await outreachPersistenceService.getOutreachHistory(prospectId);
 
     // 5. Generate Draft with Sequence Context
-    const draft = await aiFollowupService.generateFollowUpDraft(business, aiReport, history, currentStage);
+    const draft = await aiFollowupService.generateFollowUpDraft(business, storedAudit, history, currentStage);
 
     return NextResponse.json({ draft });
 
