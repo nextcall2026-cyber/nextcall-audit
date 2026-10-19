@@ -91,11 +91,23 @@ export async function GET(request: NextRequest) {
         status || undefined
       );
 
-    // NEW: Sort prospects by priorityScore descending (nulls last)
+    // Pipeline order: prospects whose audit was never opened ("New",
+    // viewAddedAt is null) go to the very top — newest additions first —
+    // while opened ones sink to the bottom, still ranked by priorityScore
+    // descending (nulls last) within that group.
     const sortedProspects = prospects.sort((a, b) => {
+      const aUnread = !a.viewAddedAt;
+      const bUnread = !b.viewAddedAt;
+      if (aUnread !== bUnread) return aUnread ? -1 : 1;
+
+      if (aUnread) {
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      }
+
       const scoreA = a.priorityScore || -1;
       const scoreB = b.priorityScore || -1;
-      return scoreB - scoreA;
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
 
     // Enrich prospects with business name and audit score for the UI list
