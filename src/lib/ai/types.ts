@@ -6,7 +6,7 @@
  * fallback. Tomorrow: add another class implementing LLMProvider.
  */
 
-export type ProviderId = "gemini" | "openai" | "free1" | "free2" | "free3";
+export type ProviderId = "gemini" | "openai" | "free1" | "free2" | "free3" | "free4" | "free5";
 
 /** An image attached to the request. `data` is raw base64 (no data: prefix). */
 export interface LLMImageInput {

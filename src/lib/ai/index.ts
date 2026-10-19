@@ -35,7 +35,7 @@ function buildProviderChain(): LLMProvider[] {
   // 1) xAI Grok keys first (FREE1_* / FREE2_* / FREE3_* — one slot per key).
   //    When a key hits its limit the circuit breaker parks it and the next
   //    slot takes over automatically.
-  for (const slot of [1, 2, 3] as const) {
+  for (const slot of [1, 2, 3, 4, 5] as const) {
     const free = new OpenAICompatibleProvider(slot);
     if (free.isConfigured()) chain.push(free);
   }
@@ -51,7 +51,7 @@ function buildProviderChain(): LLMProvider[] {
 const providerChain = buildProviderChain();
 
 const PROVIDER_DESCRIPTORS: Array<{ id: ProviderId; label: string }> = [
-  ...([1, 2, 3] as const)
+  ...([1, 2, 3, 4, 5] as const)
     .map((slot) => new OpenAICompatibleProvider(slot))
     .filter((provider) => provider.isConfigured())
     .map((provider) => ({ id: provider.id, label: provider.label })),

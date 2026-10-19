@@ -30,6 +30,8 @@ const SLOT_ENV = {
   1: { baseUrl: "FREE1_BASE_URL", access: "FREE1_ACCESS", model: "FREE1_MODEL" },
   2: { baseUrl: "FREE2_BASE_URL", access: "FREE2_ACCESS", model: "FREE2_MODEL" },
   3: { baseUrl: "FREE3_BASE_URL", access: "FREE3_ACCESS", model: "FREE3_MODEL" },
+  4: { baseUrl: "FREE4_BASE_URL", access: "FREE4_ACCESS", model: "FREE4_MODEL" },
+  5: { baseUrl: "FREE5_BASE_URL", access: "FREE5_ACCESS", model: "FREE5_MODEL" },
 } as const;
 
 function readEnv(name: string): string {
@@ -74,12 +76,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private readonly baseUrl: string;
   private readonly access: string;
 
-  constructor(slot: 1 | 2 | 3) {
+  constructor(slot: 1 | 2 | 3 | 4 | 5) {
     const names = SLOT_ENV[slot];
     this.baseUrl = readEnv(names.baseUrl).replace(/\/+$/, "");
     this.access = readEnv(names.access);
     this.model = readEnv(names.model);
-    this.id = slot === 1 ? "free1" : slot === 2 ? "free2" : "free3";
+    this.id = slot === 1 ? "free1" : slot === 2 ? "free2" : slot === 3 ? "free3" : slot === 4 ? "free4" : "free5";
     this.label = `Free LLM ${slot}${this.baseUrl ? ` (${hostOf(this.baseUrl)})` : ""}`;
   }
 
