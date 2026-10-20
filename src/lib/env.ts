@@ -42,3 +42,31 @@ const envSchema = z.object({
 
 export const env = envSchema.parse(process.env);
 export type Env = z.infer<typeof envSchema>;
+
+/**
+ * Public base URL for links embedded in outbound emails (open-tracking
+ * pixel, unsubscribe link, etc.).
+ *
+ * Resolution order:
+ * 1. NEXT_PUBLIC_APP_URL — explicit override. Set this in the Vercel
+ *    project's Environment Variables (e.g. https://audit-next-call.vercel.app),
+ *    and change it if the app moves to a custom domain.
+ * 2. VERCEL_PROJECT_PRODUCTION_URL / VERCEL_URL — injected automatically by
+ *    Vercel on every deployment, so production emails carry real https
+ *    links instead of a localhost fallback even without explicit config.
+ * 3. http://localhost:3000 — local development only.
+ */
+export function getPublicBaseUrl(): string {
+  const explicit = env.NEXT_PUBLIC_APP_URL;
+  if (explicit) return explicit.replace(/\/+$/, "");
+
+  const vercelHost =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (vercelHost) {
+    return `https://${vercelHost
+      .replace(/^https?:\/\//, "")
+      .replace(/\/+$/, "")}`;
+  }
+
+  return "http://localhost:3000";
+}

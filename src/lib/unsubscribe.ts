@@ -1,6 +1,6 @@
 import "server-only";
 import crypto from "crypto";
-import { env } from "@/lib/env";
+import { env, getPublicBaseUrl } from "@/lib/env";
 
 /**
  * Signed unsubscribe links for email footers.
@@ -25,10 +25,9 @@ export function getUnsubscribeToken(outreachRecordId: string): string {
 }
 
 export function getUnsubscribeUrl(outreachRecordId: string): string {
-  const base = env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   // Lives under /api/tracking because that prefix is already allowlisted in
   // middleware.ts for unauthenticated email-recipient endpoints.
-  const url = new URL("/api/tracking/unsubscribe", base);
+  const url = new URL("/api/tracking/unsubscribe", getPublicBaseUrl());
   url.searchParams.set("o", outreachRecordId);
   url.searchParams.set("t", getUnsubscribeToken(outreachRecordId));
   return url.toString();
