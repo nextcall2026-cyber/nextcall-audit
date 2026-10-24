@@ -71,5 +71,5 @@ async function tryGemini() {
   }
 }
 
-for (const n of [1, 2, 3, 4, 5]) await trySlot(n);
+for (const n of [1, 2, 3, 4, 5, 6, 7]) await trySlot(n);
 await tryGemini();

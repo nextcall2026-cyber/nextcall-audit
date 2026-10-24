@@ -2,7 +2,7 @@ import "server-only";
 import { LLMProvider, LLMRequest, ProviderError, ProviderErrorKind, ProviderId } from "./types";
 
 /**
- * Generic OpenAI-compatible provider — one class, three slots.
+ * Generic OpenAI-compatible provider — one class, seven slots.
  *
  * Lets the gateway rotate through multiple vendor keys / free endpoints
  * without a code change per vendor. Each slot is configured entirely through
@@ -32,6 +32,18 @@ const SLOT_ENV = {
   3: { baseUrl: "FREE3_BASE_URL", access: "FREE3_ACCESS", model: "FREE3_MODEL" },
   4: { baseUrl: "FREE4_BASE_URL", access: "FREE4_ACCESS", model: "FREE4_MODEL" },
   5: { baseUrl: "FREE5_BASE_URL", access: "FREE5_ACCESS", model: "FREE5_MODEL" },
+  6: { baseUrl: "FREE6_BASE_URL", access: "FREE6_ACCESS", model: "FREE6_MODEL" },
+  7: { baseUrl: "FREE7_BASE_URL", access: "FREE7_ACCESS", model: "FREE7_MODEL" },
+} as const;
+
+const SLOT_IDS = {
+  1: "free1",
+  2: "free2",
+  3: "free3",
+  4: "free4",
+  5: "free5",
+  6: "free6",
+  7: "free7",
 } as const;
 
 function readEnv(name: string): string {
@@ -76,12 +88,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private readonly baseUrl: string;
   private readonly access: string;
 
-  constructor(slot: 1 | 2 | 3 | 4 | 5) {
+  constructor(slot: 1 | 2 | 3 | 4 | 5 | 6 | 7) {
     const names = SLOT_ENV[slot];
     this.baseUrl = readEnv(names.baseUrl).replace(/\/+$/, "");
     this.access = readEnv(names.access);
     this.model = readEnv(names.model);
-    this.id = slot === 1 ? "free1" : slot === 2 ? "free2" : slot === 3 ? "free3" : slot === 4 ? "free4" : "free5";
+    this.id = SLOT_IDS[slot];
     this.label = `Free LLM ${slot}${this.baseUrl ? ` (${hostOf(this.baseUrl)})` : ""}`;
   }
 

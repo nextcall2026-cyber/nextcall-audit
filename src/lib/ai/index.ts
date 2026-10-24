@@ -10,7 +10,7 @@ import { LLMProvider, LLMRequest, LLMResponse, LLMUnavailableError, ProviderErro
  * LLM gateway — the single entry point every AI feature in this app uses.
  *
  * Routing policy:
- *   1. xAI Grok keys are tried FIRST (FREE1_* / FREE2_* / FREE3_* env vars —
+ *   1. xAI Grok keys are tried FIRST (FREE1_* … FREE7_* env vars —
  *      one slot per key). When a key hits its limit, the circuit breaker parks
  *      it and the next key takes over automatically.
  *   2. Google Gemini (free tier) is the late fallback — its shared capacity
@@ -32,10 +32,10 @@ export * from "./types";
 
 function buildProviderChain(): LLMProvider[] {
   const chain: LLMProvider[] = [];
-  // 1) xAI Grok keys first (FREE1_* / FREE2_* / FREE3_* — one slot per key).
+  // 1) xAI Grok keys first (FREE1_* … FREE7_* — one slot per key).
   //    When a key hits its limit the circuit breaker parks it and the next
   //    slot takes over automatically.
-  for (const slot of [1, 2, 3, 4, 5] as const) {
+  for (const slot of [1, 2, 3, 4, 5, 6, 7] as const) {
     const free = new OpenAICompatibleProvider(slot);
     if (free.isConfigured()) chain.push(free);
   }
@@ -51,7 +51,7 @@ function buildProviderChain(): LLMProvider[] {
 const providerChain = buildProviderChain();
 
 const PROVIDER_DESCRIPTORS: Array<{ id: ProviderId; label: string }> = [
-  ...([1, 2, 3, 4, 5] as const)
+  ...([1, 2, 3, 4, 5, 6, 7] as const)
     .map((slot) => new OpenAICompatibleProvider(slot))
     .filter((provider) => provider.isConfigured())
     .map((provider) => ({ id: provider.id, label: provider.label })),
