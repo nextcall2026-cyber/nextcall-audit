@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Prospect, PipelineStatus, OpportunityScore } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,7 +15,16 @@ interface EnrichedProspect extends Prospect {
     auditScore: number | null;
 }
 
-const STATUS_FILTERS: ("DUE" | "EMAILED" | PipelineStatus | "ALL")[] = [
+type PipelineFilter = "DUE" | "EMAILED" | PipelineStatus | "ALL";
+
+// In-memory pipeline cache (one list per filter). Module scope — it survives
+// client-side route changes, so returning from a prospect detail re-paints
+// the already-loaded list instantly instead of showing a spinner. A full
+// browser refresh clears it, which is the "give me a fresh list" path.
+const pipelineListCache = new Map<PipelineFilter, EnrichedProspect[]>();
+let lastActiveFilter: PipelineFilter = "ALL";
+
+const STATUS_FILTERS: PipelineFilter[] = [
     "DUE", "ALL", "EMAILED", "NEW", "READY_TO_CONTACT", "CONTACTED", "FOLLOW_UP", "QUALIFIED", "UNQUALIFIED"
 ];
 
@@ -45,30 +54,60 @@ const getOppColor = (score: OpportunityScore | null | undefined) => {
 
 export default function PipelineClient() {
     const toast = useToast();
-    const [prospects, setProspects] = useState<EnrichedProspect[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [activeFilter, setActiveFilter] = useState<"DUE" | "EMAILED" | PipelineStatus | "ALL">("ALL");
+    // Hydrate directly from the in-memory cache on mount: coming back from a
+    // prospect detail paints the previous list instantly, no spinner. A full
+    // browser refresh clears the cache — that is the "fresh list" path.
+    const [prospects, setProspects] = useState<EnrichedProspect[]>(
+        () => pipelineListCache.get(lastActiveFilter) ?? []
+    );
+    const [isLoading, setIsLoading] = useState<boolean>(() => !pipelineListCache.has(lastActiveFilter));
+    const [activeFilter, setActiveFilter] = useState<PipelineFilter>(lastActiveFilter);
+    const latestRequestId = useRef(0);
 
     useEffect(() => {
+        lastActiveFilter = activeFilter;
+        const cacheKey = activeFilter;
+        const hadCacheOnScreen = pipelineListCache.has(cacheKey);
+
+        // Revalidate in the background so the painted list becomes truthful
+        // (e.g. the audit just opened flips from "New" to viewed). The screen
+        // is already populated from the in-memory cache on mount, so this
+        // fetch never causes a spinner; a failure stays quiet while a cached
+        // list the user can still read is already on screen.
+        const requestId = ++latestRequestId.current;
         const fetchProspects = async () => {
-            setIsLoading(true);
             try {
                 const query = activeFilter !== "ALL" && activeFilter !== "DUE" ? `?status=${activeFilter}` : "";
                 const response = await fetch(`/api/prospects${query}`);
                 if (!response.ok) throw new Error("Failed to fetch pipeline");
 
                 const data = await response.json();
+                if (requestId !== latestRequestId.current) return; // a newer filter already won
                 setProspects(data.prospects);
+                pipelineListCache.set(cacheKey, data.prospects);
             } catch (err) {
-                toast.error("Could not load pipeline", getErrorMessage(err));
                 logger.error("[PipelineClient] Fetch failed:", getErrorMessage(err));
+                if (!hadCacheOnScreen) {
+                    toast.error("Could not load pipeline", getErrorMessage(err));
+                }
             } finally {
-                setIsLoading(false);
+                if (requestId === latestRequestId.current) {
+                    setIsLoading(false);
+                }
             }
         };
 
         fetchProspects();
     }, [activeFilter, toast]);
+
+    // Filter switches hydrate from the cache instantly; only a filter that
+    // was never loaded shows the spinner.
+    const applyFilter = (filter: PipelineFilter) => {
+        setActiveFilter(filter);
+        const cached = pipelineListCache.get(filter);
+        setIsLoading(!cached);
+        if (cached) setProspects(cached);
+    };
 
     const getScoreColor = (score: number | null) => {
         if (score === null) return "text-gray-400";
@@ -96,7 +135,9 @@ export default function PipelineClient() {
                 const data = await response.json().catch(() => ({ error: "Delete failed" }));
                 throw new Error(data.error || "Delete failed");
             }
-            setProspects(prev => prev.filter(p => p.id !== prospect.id));
+            const next = prospects.filter(p => p.id !== prospect.id);
+            setProspects(next);
+            pipelineListCache.set(activeFilter, next);
             toast.success(`${prospect.businessName} removed from pipeline`);
         } catch (err: unknown) {
             const message = err instanceof Error ? getErrorMessage(err) : String(err);
@@ -127,7 +168,7 @@ export default function PipelineClient() {
                         key={status}
                         variant={activeFilter === status ? "default" : "outline"}
                         size="sm"
-                        onClick={() => setActiveFilter(status)}
+                        onClick={() => applyFilter(status)}
                         className={status === "DUE" && activeFilter !== "DUE" ? "border-red-500 text-red-600 hover:bg-red-50" : ""}
                     >
                         {status.replace(/_/g, " ")}
