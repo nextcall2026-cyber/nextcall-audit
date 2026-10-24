@@ -7,6 +7,7 @@ import { opportunityService } from "@/services/opportunityService";
 import { parseBusinessNotes } from "@/services/notesParser";
 import { PipelineStatus } from "@/types";
 import { logger } from "@/lib/logger";
+import { compareProspectsForPipeline } from "@/lib/pipelineSort";
 
 import { getErrorMessage } from "@/lib/errors";
 const CreateProspectSchema = z.object({
@@ -91,24 +92,9 @@ export async function GET(request: NextRequest) {
         status || undefined
       );
 
-    // Pipeline order: prospects whose audit was never opened ("New",
-    // viewAddedAt is null) go to the very top — newest additions first —
-    // while opened ones sink to the bottom, still ranked by priorityScore
-    // descending (nulls last) within that group.
-    const sortedProspects = prospects.sort((a, b) => {
-      const aUnread = !a.viewAddedAt;
-      const bUnread = !b.viewAddedAt;
-      if (aUnread !== bUnread) return aUnread ? -1 : 1;
-
-      if (aUnread) {
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      }
-
-      const scoreA = a.priorityScore || -1;
-      const scoreB = b.priorityScore || -1;
-      if (scoreA !== scoreB) return scoreB - scoreA;
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
+    // Canonical pipeline order lives in lib/pipelineSort.ts and is shared
+    // with the client, so optimistic cache patches keep the exact same order.
+    const sortedProspects = prospects.sort(compareProspectsForPipeline);
 
     // Enrich prospects with business name and audit score for the UI list
     const enrichedProspects = await Promise.all(

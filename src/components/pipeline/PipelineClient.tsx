@@ -1,7 +1,16 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Prospect, PipelineStatus, OpportunityScore } from "@/types";
+import { OpportunityScore } from "@/types";
+import {
+    EnrichedProspect,
+    PipelineFilter,
+    getCachedList,
+    getLastActiveFilter,
+    hasCachedList,
+    setCachedList,
+    setLastActiveFilter,
+} from "./pipelineCache";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Trash2 } from "lucide-react";
@@ -10,20 +19,6 @@ import Link from "next/link";
 
 import { getErrorMessage } from "@/lib/errors";
 import { useToast } from "@/components/ui/toast";
-interface EnrichedProspect extends Prospect {
-    businessName: string;
-    auditScore: number | null;
-}
-
-type PipelineFilter = "DUE" | "EMAILED" | PipelineStatus | "ALL";
-
-// In-memory pipeline cache (one list per filter). Module scope — it survives
-// client-side route changes, so returning from a prospect detail re-paints
-// the already-loaded list instantly instead of showing a spinner. A full
-// browser refresh clears it, which is the "give me a fresh list" path.
-const pipelineListCache = new Map<PipelineFilter, EnrichedProspect[]>();
-let lastActiveFilter: PipelineFilter = "ALL";
-
 const STATUS_FILTERS: PipelineFilter[] = [
     "DUE", "ALL", "EMAILED", "NEW", "READY_TO_CONTACT", "CONTACTED", "FOLLOW_UP", "QUALIFIED", "UNQUALIFIED"
 ];
@@ -58,16 +53,16 @@ export default function PipelineClient() {
     // prospect detail paints the previous list instantly, no spinner. A full
     // browser refresh clears the cache — that is the "fresh list" path.
     const [prospects, setProspects] = useState<EnrichedProspect[]>(
-        () => pipelineListCache.get(lastActiveFilter) ?? []
+        () => getCachedList(getLastActiveFilter()) ?? []
     );
-    const [isLoading, setIsLoading] = useState<boolean>(() => !pipelineListCache.has(lastActiveFilter));
-    const [activeFilter, setActiveFilter] = useState<PipelineFilter>(lastActiveFilter);
+    const [isLoading, setIsLoading] = useState<boolean>(() => !hasCachedList(getLastActiveFilter()));
+    const [activeFilter, setActiveFilter] = useState<PipelineFilter>(getLastActiveFilter());
     const latestRequestId = useRef(0);
 
     useEffect(() => {
-        lastActiveFilter = activeFilter;
+        setLastActiveFilter(activeFilter);
         const cacheKey = activeFilter;
-        const hadCacheOnScreen = pipelineListCache.has(cacheKey);
+        const hadCacheOnScreen = hasCachedList(cacheKey);
 
         // Revalidate in the background so the painted list becomes truthful
         // (e.g. the audit just opened flips from "New" to viewed). The screen
@@ -84,7 +79,7 @@ export default function PipelineClient() {
                 const data = await response.json();
                 if (requestId !== latestRequestId.current) return; // a newer filter already won
                 setProspects(data.prospects);
-                pipelineListCache.set(cacheKey, data.prospects);
+                setCachedList(cacheKey, data.prospects);
             } catch (err) {
                 logger.error("[PipelineClient] Fetch failed:", getErrorMessage(err));
                 if (!hadCacheOnScreen) {
@@ -104,7 +99,7 @@ export default function PipelineClient() {
     // was never loaded shows the spinner.
     const applyFilter = (filter: PipelineFilter) => {
         setActiveFilter(filter);
-        const cached = pipelineListCache.get(filter);
+        const cached = getCachedList(filter);
         setIsLoading(!cached);
         if (cached) setProspects(cached);
     };
@@ -137,7 +132,7 @@ export default function PipelineClient() {
             }
             const next = prospects.filter(p => p.id !== prospect.id);
             setProspects(next);
-            pipelineListCache.set(activeFilter, next);
+            setCachedList(activeFilter, next);
             toast.success(`${prospect.businessName} removed from pipeline`);
         } catch (err: unknown) {
             const message = err instanceof Error ? getErrorMessage(err) : String(err);

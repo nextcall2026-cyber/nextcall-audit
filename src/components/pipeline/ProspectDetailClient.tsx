@@ -14,6 +14,7 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 
 import { getErrorMessage } from "@/lib/errors";
 import { useToast } from "@/components/ui/toast";
+import { patchCachedProspect } from "./pipelineCache";
 interface ProspectDetailData {
     prospect: Prospect;
     business: Business;
@@ -71,6 +72,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             const result = await loadDetails();
             setData(result);
             setEmailInput(result.prospect.contactEmail || "");
+            patchCachedProspect(result.prospect);
         } catch (err) {
             logger.error("[ProspectDetail] Fetch failed:", getErrorMessage(err));
             setActionError(getErrorMessage(err));
@@ -84,6 +86,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             .then((result) => {
                 setData(result);
                 setEmailInput(result.prospect.contactEmail || "");
+                patchCachedProspect(result.prospect);
             })
             .catch((err: unknown) => {
                 logger.error("[ProspectDetail] Fetch failed:", getErrorMessage(err));
@@ -108,6 +111,10 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
             .then((updated: { prospect: Prospect } | null) => {
                 if (!updated?.prospect) return;
                 setData(prev => prev ? { ...prev, prospect: updated.prospect } : prev);
+                // Reflect the open in the cached pipeline list right away, so
+                // going back shows the prospect as opened (and re-sorted)
+                // without waiting for the background refresh.
+                patchCachedProspect(updated.prospect);
             })
             .catch(() => { /* ignore */ });
     }, [data, isLoading, prospectId]);
@@ -121,6 +128,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                 body: JSON.stringify({ status: newStatus }),
             });
             setData({ ...data, prospect: { ...data.prospect, pipelineStatus: newStatus } });
+            patchCachedProspect({ ...data.prospect, pipelineStatus: newStatus });
         } catch (err) {
             toast.error("Status update failed", getErrorMessage(err));
             logger.error("[ProspectDetail] Status update failed:", getErrorMessage(err));
