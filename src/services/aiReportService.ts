@@ -193,7 +193,12 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
         system: systemPrompt,
         user: userPrompt,
         temperature: 0.5, // Slightly higher to allow for more natural journey analysis, but still grounded
-        maxOutputTokens: 1500, // Increased to accommodate the expanded report structure
+        // The expanded report JSON is long, and reasoning-capable models
+        // (e.g. qwen3 on Groq) spend part of the budget on hidden thinking
+        // tokens. 1500 used to truncate mid-string -> "json_validate_failed";
+        // live testing showed the report needs ~1.2k visible tokens plus
+        // reasoning, so give a generous ceiling.
+        maxOutputTokens: 8000,
         json: true,
         thinking: "low", // small reasoning budget improves prose quality for this long-form report
       });

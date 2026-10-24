@@ -276,7 +276,9 @@ Write the Stage ${currentStage} follow-up email draft now.
         system: systemPrompt,
         user: userPrompt,
         temperature: 0.65,
-        maxOutputTokens: 700,
+        // Reasoning-capable models (e.g. qwen3 on Groq) spend part of this
+        // budget on hidden thinking tokens before writing the JSON.
+        maxOutputTokens: 1500,
         json: true,
         thinking: "off",
       });

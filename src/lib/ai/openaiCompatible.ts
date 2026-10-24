@@ -140,9 +140,17 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
+      // Some vendors signal an account-level block with a 400 body (e.g.
+      // Groq's "organization_restricted"). Treat it as an auth problem so
+      // the circuit breaker parks the provider for 10 minutes instead of
+      // re-trying a dead key on every single request.
+      const accountBlocked =
+        /organization_restricted|organization has been restricted|account (?:has been )?(?:disabled|suspended|deactivated)/i.test(
+          detail
+        );
       throw new ProviderError(
         this.id,
-        kindForStatus(res.status),
+        accountBlocked ? "auth" : kindForStatus(res.status),
         `${res.status} ${res.statusText}${detail ? ` — ${trimDetail(detail)}` : ""}`,
         res.status
       );
