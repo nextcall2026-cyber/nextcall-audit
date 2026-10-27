@@ -27,7 +27,7 @@ async function trySlot(n) {
   const model = env[`FREE${n}_MODEL`];
   if (!base || !key || !model) {
     console.log(`FREE${n}: not configured in .env`);
-    return false;
+    return null;
   }
   try {
     const { res, text, ms } = await chat(
@@ -44,10 +44,10 @@ async function trySlot(n) {
     console.log(
       `FREE${n}: host=${new URL(base).host} model=${model} key=${mask(key)} status=${res.status} ${ms}ms body=${text.slice(0, 200).replace(/\s+/g, " ")}`
     );
-    return res.ok;
+    return res.ok ? n : null;
   } catch (e) {
     console.log(`FREE${n}: host=${new URL(base).host} model=${model} key=${mask(key)} FETCH-ERROR ${e.name}: ${e.message}`);
-    return false;
+    return null;
   }
 }
 
@@ -83,10 +83,14 @@ async function tryGemini() {
  * the app depends on (JSON mode, follow-up-sized and report-sized bodies).
  * This catches providers that answer auth fine but break structured output.
  */
-async function deepCheck() {
-  const n = [1, 2, 3, 4, 5, 6, 7].find(
-    (s) => env[`FREE${s}_BASE_URL`] && env[`FREE${s}_ACCESS`] && env[`FREE${s}_MODEL`]
-  );
+async function deepCheck(preferredSlot) {
+  // Prefer the first slot that just answered OK — a deep check against a
+  // dead/restricted org tells us nothing about the shapes the app sends.
+  const n =
+    preferredSlot ??
+    [1, 2, 3, 4, 5, 6, 7].find(
+      (s) => env[`FREE${s}_BASE_URL`] && env[`FREE${s}_ACCESS`] && env[`FREE${s}_MODEL`]
+    );
   if (!n) {
     console.log("DEEP CHECK: skipped — no configured FREE slot.");
     return;
@@ -166,6 +170,10 @@ async function deepCheck() {
   } catch {}
 }
 
-for (const n of [1, 2, 3, 4, 5, 6, 7]) await trySlot(n);
+let workingSlot = null;
+for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+  const ok = await trySlot(n);
+  if (ok && workingSlot === null) workingSlot = ok;
+}
 await tryGemini();
-await deepCheck();
+await deepCheck(workingSlot);
