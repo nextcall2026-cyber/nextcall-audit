@@ -8,7 +8,7 @@ import { AppNotification } from "@/types";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
-import { formatRelativeTime, iconFor } from "./presentation";
+import { formatRelativeTime, iconFor } from "@/lib/notificationTypes";
 
 const POLL_INTERVAL_MS = 45_000;
 const PREVIEW_LIMIT = 8;

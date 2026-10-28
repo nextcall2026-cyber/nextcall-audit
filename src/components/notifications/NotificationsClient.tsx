@@ -7,7 +7,7 @@ import { AppNotification } from "@/types";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
-import { formatRelativeTime, iconFor, labelFor } from "./presentation";
+import { formatRelativeTime, iconFor, labelFor } from "@/lib/notificationTypes";
 
 type FeedFilter = "ALL" | "UNREAD";
 

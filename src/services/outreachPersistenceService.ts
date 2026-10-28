@@ -295,6 +295,26 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
   }
 
   /**
+   * Counts SENT outreach emails since an ISO timestamp.
+   * Backs the auto-send daily cap, so a burst can never burn the sending
+   * domain's reputation (Resend free tier allows 100 emails/day).
+   */
+  async countSentSince(sinceIso: string): Promise<number> {
+    try {
+      const collection = await getOutreachCollection();
+      const cursor = collection.find({ status: "SENT" });
+      const docs = (await cursor.toArray()) as unknown as OutreachRecord[];
+      return docs.filter((d) => d.sentAt && d.sentAt >= sinceIso).length;
+    } catch (error) {
+      logger.error(
+        "[OutreachPersistenceService] Failed to count sends:",
+        getErrorMessage(error)
+      );
+      return 0;
+    }
+  }
+
+  /**
    * Fetches all outreach records that were sent AND opened.
    * Used by the follow-up automation sweep. An open already implies delivery,
    * so this works even without the delivery webhook configured.

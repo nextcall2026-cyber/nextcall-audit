@@ -1,6 +1,10 @@
 import "server-only";
 
 import { AppNotification, NotificationSettings, NotificationType } from "@/types";
+import {
+  CRITICAL_NOTIFICATION_TYPES,
+  NOTIFICATION_TYPES,
+} from "@/lib/notificationTypes";
 import { getNotificationsCollection, getSettingsCollection } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
@@ -18,36 +22,13 @@ import { randomUUID } from "crypto";
  * collection as one document.
  */
 
-export const NOTIFICATION_TYPES: NotificationType[] = [
-  "PROSPECT_ADDED",
-  "REPORT_READY",
-  "REPORT_FAILED",
-  "EMAIL_SENT",
-  "EMAIL_FIRST_OPEN",
-  "TRIAL_LINK_CLICKED",
-  "REPLY_RECEIVED",
-  "HOT_PROSPECT",
-  "EMAIL_BOUNCED",
-  "EMAIL_COMPLAINED",
-  "UNSUBSCRIBED",
-  "AI_PROVIDER_ISSUE",
-  "AUTOMATION_ISSUE",
-  "DAILY_DIGEST",
-];
+export { NOTIFICATION_TYPES };
 
-/**
- * Types that are always delivered, even during quiet hours — losing these
- * would cost real money or reputation (a reply, a bounce, a broken provider).
- */
-const CRITICAL_TYPES: ReadonlySet<NotificationType> = new Set([
-  "REPLY_RECEIVED",
-  "EMAIL_BOUNCED",
-  "EMAIL_COMPLAINED",
-  "UNSUBSCRIBED",
-  "AI_PROVIDER_ISSUE",
-  "AUTOMATION_ISSUE",
-  "REPORT_FAILED",
-]);
+/** Types that are always delivered, even during quiet hours — losing these
+ * would cost real money or reputation (a reply, a bounce, a broken provider). */
+const CRITICAL_TYPES: ReadonlySet<NotificationType> = new Set(
+  CRITICAL_NOTIFICATION_TYPES
+);
 
 const SETTINGS_DOC_ID = "notification-settings";
 const DEDUPE_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
