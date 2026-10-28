@@ -30,7 +30,13 @@ export default function LoginPage() {
         router.refresh();
       } else {
         const data = await res.json();
-        setError(data.error || "Login failed");
+        // Server-side configuration problems name the offending variables
+        // (never their values) — show them so they can be fixed in Vercel.
+        setError(
+          data.configuration
+            ? `${data.error}: ${data.configuration}`
+            : data.error || "Login failed"
+        );
       }
     } catch {
       setError("Network error. Please try again.");

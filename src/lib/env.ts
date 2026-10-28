@@ -40,7 +40,25 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
  });
 
-export const env = envSchema.parse(process.env);
+/**
+ * Parsed with safeParse so a misconfigured variable names itself instead of
+ * surfacing as a blank 500 at every route that touches env. The thrown
+ * message lists variable NAMES and validation messages only — never values.
+ */
+function parseEnv(): z.infer<typeof envSchema> {
+  const result = envSchema.safeParse(process.env);
+
+  if (!result.success) {
+    const problems = result.error.issues
+      .map((issue) => `${issue.path.join(".") || "(env)"} — ${issue.message}`)
+      .join("; ");
+    throw new Error(`Invalid environment configuration: ${problems}`);
+  }
+
+  return result.data;
+}
+
+export const env = parseEnv();
 export type Env = z.infer<typeof envSchema>;
 
 /**
