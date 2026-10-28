@@ -413,6 +413,51 @@ export interface FollowUpDraft {
 }
 
 // ==========================================
+// IN-APP NOTIFICATION FEED
+// ==========================================
+
+/** Every event the dashboard bell can surface. */
+export type NotificationType =
+  | 'PROSPECT_ADDED'
+  | 'REPORT_READY'
+  | 'REPORT_FAILED'
+  | 'EMAIL_SENT'
+  | 'EMAIL_FIRST_OPEN'
+  | 'TRIAL_LINK_CLICKED'
+  | 'REPLY_RECEIVED'
+  | 'HOT_PROSPECT'
+  | 'EMAIL_BOUNCED'
+  | 'EMAIL_COMPLAINED'
+  | 'UNSUBSCRIBED'
+  | 'AI_PROVIDER_ISSUE'
+  | 'AUTOMATION_ISSUE'
+  | 'DAILY_DIGEST';
+
+export interface AppNotification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string | null;
+  /** Deep link inside the dashboard, e.g. /dashboard/pipeline/<id>. */
+  href: string | null;
+  prospectId: string | null;
+  businessId: string | null;
+  /** Suppresses repeats of the same event within 12 hours. */
+  dedupeKey: string | null;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface NotificationSettings {
+  enabled: Record<NotificationType, boolean>;
+  quietHoursEnabled: boolean;
+  quietStartHour: number;
+  quietEndHour: number;
+  timezone: string;
+  updatedAt: string;
+}
+
+// ==========================================
 // MODULE 13: MULTI-PROVIDER DISCOVERY TYPES
 // ==========================================
 

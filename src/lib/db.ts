@@ -99,3 +99,41 @@ export async function getOutreachCollection() {
 
   return db.collection("outreach");
 }
+
+// --- NOTIFICATIONS & SETTINGS ---
+
+// Collections created on first use (the Astra Data API needs the collection to
+// exist before the first query; the in-memory shim creates collections lazily
+// on its own).
+const ensuredCollections = new Set<string>();
+
+async function getEnsuredCollection(name: string) {
+  const db = await getDbClient();
+
+  if (!ensuredCollections.has(name)) {
+    const create = (db as unknown as {
+      createCollection?: (n: string, o?: Record<string, unknown>) => Promise<unknown>;
+    }).createCollection;
+
+    if (typeof create === "function") {
+      try {
+        await create.call(db, name, { defaultIdType: "uuid" });
+        logger.info(`[DB] Created collection "${name}".`);
+      } catch {
+        // Already exists — nothing to do.
+      }
+    }
+
+    ensuredCollections.add(name);
+  }
+
+  return db.collection(name);
+}
+
+export async function getNotificationsCollection() {
+  return getEnsuredCollection("notifications");
+}
+
+export async function getSettingsCollection() {
+  return getEnsuredCollection("settings");
+}

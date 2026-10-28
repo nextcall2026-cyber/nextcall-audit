@@ -4,15 +4,17 @@ import { useSyncExternalStore, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/dashboard/LogoutButton";
+import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { ToastProvider } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Compass, Kanban, Settings, Camera, Menu, PanelLeft } from "lucide-react";
+import { LayoutDashboard, Compass, Kanban, Settings, Camera, Menu, PanelLeft, Bell } from "lucide-react";
 
 const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/dashboard/discovery", label: "Business Discovery", icon: Compass },
     { href: "/dashboard/screenshot", label: "From Screenshot", icon: Camera },
     { href: "/dashboard/pipeline", label: "Pipeline", icon: Kanban },
+    { href: "/dashboard/notifications", label: "Notifications", icon: Bell },
     { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
@@ -153,7 +155,10 @@ export default function DashboardLayout({
                         </button>
                         <h1 className="truncate text-base font-semibold text-foreground">{pageTitle}</h1>
                     </div>
-                    <LogoutButton />
+                    <div className="flex items-center gap-1">
+                        <NotificationBell />
+                        <LogoutButton />
+                    </div>
                 </header>
                 <main className="flex flex-1 flex-col gap-4 p-4 sm:p-6">
                     {children}
