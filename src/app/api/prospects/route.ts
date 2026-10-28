@@ -7,6 +7,7 @@ import { opportunityService } from "@/services/opportunityService";
 import { parseBusinessNotes } from "@/services/notesParser";
 import { PipelineStatus } from "@/types";
 import { logger } from "@/lib/logger";
+import { notificationService } from "@/services/notificationService";
 import { compareProspectsForPipeline } from "@/lib/pipelineSort";
 
 import { getErrorMessage } from "@/lib/errors";
@@ -65,6 +66,19 @@ export async function POST(request: NextRequest) {
     if (!prospect) {
       throw new Error("Failed to create prospect.");
     }
+
+    // In-app feed: a new prospect is the moment the pipeline list changes.
+    await notificationService.notify({
+      type: "PROSPECT_ADDED",
+      title: `New prospect: ${business.name}`,
+      body: contactEmail
+        ? `Added to the pipeline · ${contactEmail}`
+        : "Added to the pipeline — no contact email detected yet",
+      href: `/dashboard/pipeline/${prospect.id}`,
+      prospectId: prospect.id,
+      businessId,
+      dedupeKey: `prospect-added:${prospect.id}`,
+    });
 
     return NextResponse.json({ prospect });
   } catch (error) {

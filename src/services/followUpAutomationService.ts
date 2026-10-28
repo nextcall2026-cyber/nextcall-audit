@@ -11,6 +11,7 @@ import { renderEmailHtml } from "@/lib/emailRenderer";
 import { getOpenTrackingUrl } from "@/lib/openTracking";
 import { getUnsubscribeUrl } from "@/lib/unsubscribe";
 import { priorityService } from "@/services/priorityService";
+import { notificationService } from "@/services/notificationService";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -92,6 +93,12 @@ export class FollowUpAutomationService {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error(`[FollowUpAutomation] Sweep failed: ${message}`);
+      await notificationService.notify({
+        type: "AUTOMATION_ISSUE",
+        title: "Follow-up sweep failed",
+        body: message.slice(0, 300),
+        dedupeKey: "followup-sweep-failed",
+      });
     } finally {
       this.isRunning = false;
       logger.info(`[FollowUpAutomation] Sweep finished in ${Date.now() - startedAt}ms.`);

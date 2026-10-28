@@ -10,6 +10,7 @@ import { logger } from "@/lib/logger";
 import { priorityService } from "@/services/priorityService";
 import { EnrichmentData } from "@/types";
 import { rateLimit } from "@/lib/rateLimiter";
+import { notificationService } from "@/services/notificationService";
 
 import { getErrorMessage } from "@/lib/errors";
 const AuditRequestSchema = z.object({
@@ -145,12 +146,46 @@ export async function POST(request: NextRequest) {
 
         // Update the local object to return to the client
         latestAuditRecord.aiReport = aiReport;
+
+        // In-app feed: the report is the artifact the user acts on.
+        await notificationService.notify({
+          type: "REPORT_READY",
+          title: `Audit report ready: ${business.name}`,
+          body: `Overall score ${latestAuditRecord.audit.overallScore}/100 — open the pipeline to review and send.`,
+          href: prospect ? `/dashboard/pipeline/${prospect.id}` : null,
+          prospectId: prospect?.id ?? null,
+          businessId,
+          dedupeKey: `report-ready:${latestAuditRecord.id}`,
+        });
       } catch (aiError) {
         logger.error(
           `[API /audit] AI Report generation failed for ${businessId}: ${getErrorMessage(aiError)}`
         );
 
         aiWarning = `AI report generation failed: ${getErrorMessage(aiError)}. The deterministic audit is shown — try Re-run Audit later.`;
+
+        // In-app feed: a failed report is worth knowing about immediately.
+        const failureText = getErrorMessage(aiError);
+        await notificationService.notify({
+          type: "REPORT_FAILED",
+          title: `Audit report failed: ${business.name}`,
+          body: failureText.slice(0, 300),
+          href: prospect ? `/dashboard/pipeline/${prospect.id}` : null,
+          prospectId: prospect?.id ?? null,
+          businessId,
+          dedupeKey: `report-failed:${businessId}`,
+        });
+
+        // A provider-wide failure (keys down / quota out) is system health,
+        // not a one-off report problem — surface it separately.
+        if (/provider|quota|llm|api key|unauthorized/i.test(failureText)) {
+          await notificationService.notify({
+            type: "AI_PROVIDER_ISSUE",
+            title: "AI provider problem",
+            body: failureText.slice(0, 240),
+            dedupeKey: "ai-provider-issue",
+          });
+        }
 
         // Don't throw here, so the user still gets
         // the deterministic audit even if AI fails

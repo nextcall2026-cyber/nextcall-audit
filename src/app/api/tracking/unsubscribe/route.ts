@@ -5,6 +5,7 @@ import { verifyUnsubscribeToken } from "@/lib/unsubscribe";
 import { logger } from "@/lib/logger";
 
 import { getErrorMessage } from "@/lib/errors";
+import { notificationService } from "@/services/notificationService";
 
 /**
  * Email unsubscribe endpoint (no auth — recipients click it from the email
@@ -130,6 +131,16 @@ export async function POST(request: NextRequest) {
     await prospectPersistenceService.updateSuppression(record.prospectId, true, "UNSUBSCRIBED");
     await prospectPersistenceService.updateOutreachState(record.prospectId, "UNSUBSCRIBED");
     logger.info(`[API /unsubscribe] Prospect ${record.prospectId} unsubscribed via outreach record ${recordId}.`);
+
+    await notificationService.notify({
+      type: "UNSUBSCRIBED",
+      title: "Someone unsubscribed",
+      body: `${record.recipient} opted out — sequence stopped and future emails suppressed.`,
+      href: `/dashboard/pipeline/${record.prospectId}`,
+      prospectId: record.prospectId,
+      businessId: record.businessId,
+      dedupeKey: `unsubscribed:${record.prospectId}`,
+    });
 
     return page(
       "You're unsubscribed",

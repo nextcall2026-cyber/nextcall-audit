@@ -7,6 +7,7 @@ import { randomUUID } from "crypto";
 
 
 import { getErrorMessage } from "@/lib/errors";
+import { notificationService } from "@/services/notificationService";
 export class OutreachPersistenceService {
   /**
    * Checks if a business has already been successfully contacted.
@@ -132,6 +133,21 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
           record.prospectId,
           record.type === 'FOLLOW_UP' ? 'FOLLOW_UP' : 'CONTACTED'
         );
+
+        // In-app feed: every send is a visible step in the sequence.
+        await notificationService.notify({
+          type: "EMAIL_SENT",
+          title: `Email sent: ${record.subject}`,
+          body: `To ${record.recipient}${
+            record.type === 'FOLLOW_UP' && record.sequenceStage
+              ? ` · follow-up ${record.sequenceStage}`
+              : " · initial audit email"
+          }`,
+          href: `/dashboard/pipeline/${record.prospectId}`,
+          prospectId: record.prospectId,
+          businessId: record.businessId,
+          dedupeKey: `email-sent:${record.id}`,
+        });
       }
     } catch (error) {
       logger.error(`[OutreachPersistenceService] Failed to mark outreach ${id} as SENT:`, getErrorMessage(error));
@@ -253,6 +269,25 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
       );
       if (result.modifiedCount > 0) {
         logger.info(`[OutreachPersistenceService] Recorded open for outreach ${id}.`);
+
+        // In-app feed: the first open per prospect is the interesting signal
+        // (the pixel fires on every image load, so later opens stay quiet).
+        const opened = (await collection.findOne({ id })) as unknown as OutreachRecord | null;
+        if (opened) {
+          await notificationService.notify({
+            type: "EMAIL_FIRST_OPEN",
+            title: `Email opened: ${opened.subject}`,
+            body: `To ${opened.recipient}${
+              opened.type === "FOLLOW_UP" && opened.sequenceStage
+                ? ` · follow-up ${opened.sequenceStage}`
+                : " · initial email"
+            }`,
+            href: `/dashboard/pipeline/${opened.prospectId}`,
+            prospectId: opened.prospectId,
+            businessId: opened.businessId,
+            dedupeKey: `first-open:${opened.prospectId}`,
+          });
+        }
       }
     } catch (error) {
       logger.error(`[OutreachPersistenceService] Failed to record open for outreach ${id}:`, getErrorMessage(error));
@@ -318,6 +353,24 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
 
       logger.info(`[OutreachPersistenceService] Updated delivery status to ${status} for Message ID: ${resendMessageId}`);
       
+      if (status === 'BOUNCED' || status === 'COMPLAINED') {
+        // In-app feed: deliverability signals — these decide whether the
+        // sending domain keeps its reputation.
+        await notificationService.notify({
+          type: status === 'BOUNCED' ? "EMAIL_BOUNCED" : "EMAIL_COMPLAINED",
+          title: status === 'BOUNCED'
+            ? "Email bounced — prospect suppressed"
+            : "Spam complaint — prospect suppressed",
+          body: reason
+            ? `Reason: ${reason}`
+            : `Prospect ${record.prospectId} will not be contacted again.`,
+          href: `/dashboard/pipeline/${record.prospectId}`,
+          prospectId: record.prospectId,
+          businessId: record.businessId,
+          dedupeKey: `${status.toLowerCase()}:${record.prospectId}`,
+        });
+      }
+
       // Return prospectId so we can suppress them if it bounced
       return record.prospectId;
     } catch (error) {
