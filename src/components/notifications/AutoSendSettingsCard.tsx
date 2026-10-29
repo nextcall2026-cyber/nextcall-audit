@@ -230,12 +230,12 @@ export default function AutoSendSettingsCard() {
             setSettings(data.settings);
             setDraft(toDraft(data.settings));
             writeDraft(null);
-            toast.success("Auto-send settings saved", "The new values are stored and take effect on the next sweep.");
+            toast.success("Saved", "These settings are stored and apply to the next send.");
         } catch (err) {
             const message = getErrorMessage(err);
             logger.error("[AutoSendSettings] Save failed:", message);
             setSaveError(message);
-            toast.error("Auto-send settings were NOT saved", message);
+            toast.error("Could not save", message);
         } finally {
             setIsSaving(false);
         }
@@ -263,23 +263,23 @@ export default function AutoSendSettingsCard() {
             if (!pass) throw new Error("The pass returned no auto-send result.");
 
             if (pass.dryRun) {
-                const message = `${pass.candidates} candidate(s) would be emailed. Dry run is on, so nothing was sent.`;
-                setLastRun(`Dry run — ${message}`);
-                toast.info("Dry run — nothing sent", message);
+                const message = `${pass.candidates} prospect(s) would get an email. Test mode is ON, so nothing was sent.`;
+                setLastRun(`Test mode — ${message}`);
+                toast.info("TEST MODE: nothing was sent", message);
             } else if (pass.sent > 0) {
-                const message = `${pass.sent} email(s) sent from ${pass.candidates} candidate(s).`;
+                const message = `${pass.sent} email(s) sent (out of ${pass.candidates} prospect(s) waiting).`;
                 setLastRun(`Just now — ${message}`);
                 toast.success("Audit emails sent", message);
             } else {
-                const message = pass.skipped || "No prospect was ready to email.";
+                const message = pass.skipped || "No prospect was waiting for an email.";
                 setLastRun(`Just now — ${message}`);
-                toast.info("Automation pass finished", message);
+                toast.info("Nothing to send right now", message);
             }
         } catch (err) {
             const message = getErrorMessage(err);
             logger.error("[AutoSendSettings] Manual pass failed:", message);
             setSaveError(message);
-            toast.error("Automation pass failed", message);
+            toast.error("Sending failed", message);
         } finally {
             setIsRunningPass(false);
         }
@@ -301,7 +301,7 @@ export default function AutoSendSettingsCard() {
             ? "Unsaved changes"
             : savedAt
               ? `Saved ${savedAt}`
-              : "Not saved yet";
+              : "Nothing saved yet";
 
     return (
         <Card>
@@ -344,16 +344,16 @@ export default function AutoSendSettingsCard() {
                                   : "border-border bg-muted/40 text-muted-foreground"
                         )}>
                             {isLive
-                                ? `LIVE — new prospects are emailed automatically (${draft.businessHoursEnabled ? `${hourLabel(BUSINESS_START_HOUR)}–${hourLabel(BUSINESS_END_HOUR)} ${settings.timezone}` : "any time"}, up to ${draft.dailyCap}/day).`
+                                ? `LIVE — real emails are being sent. Up to ${draft.dailyCap} a day, ${draft.businessHoursEnabled ? `only between ${hourLabel(BUSINESS_START_HOUR)} and ${hourLabel(BUSINESS_END_HOUR)} ${settings.timezone}` : "at any hour"}.`
                                 : isDryRunOnly
-                                  ? "Auto-send is on but DRY RUN is still on, so nothing is actually sent — each candidate only gets a feed entry. Switch Dry run off and press Save changes to start sending."
-                                  : "Not sending: auto-send is off. Dry run writes a feed entry instead of sending."}
+                                  ? "TEST MODE — no email is being sent. Every new prospect only shows up in the notifications feed as a preview. To start sending for real: switch TEST MODE off and press Save."
+                                  : "OFF — no email is sent by itself. Nothing happens until you switch Auto-send on."}
                         </div>
 
                         <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
                             <span className="text-xs text-muted-foreground">
-                                Runs automatically every 15 minutes (follow-ups + new audit emails).
-                                {lastRun ? ` ${lastRun}` : " Nothing run by hand yet."}
+                                Sends by itself every 15 minutes (follow-ups + new audit emails).
+                                {lastRun ? ` ${lastRun}` : " Not run by hand yet."}
                             </span>
                             <Button
                                 variant="outline"
@@ -362,15 +362,15 @@ export default function AutoSendSettingsCard() {
                                 disabled={isRunningPass}
                                 className="shrink-0"
                             >
-                                {isRunningPass ? "Running..." : "Run now"}
+                                {isRunningPass ? "Sending..." : "Send now"}
                             </Button>
                         </div>
 
                         <div className="flex items-center justify-between gap-3">
                             <div className="flex flex-col">
-                                <span className="text-sm font-medium">Auto-send enabled</span>
+                                <span className="text-sm font-medium">Auto-send</span>
                                 <span className="text-xs text-muted-foreground">
-                                    Master switch. When off, nothing is emailed automatically.
+                                    OFF: nothing is emailed by itself. ON: every new prospect gets the audit email automatically.
                                 </span>
                             </div>
                             <Button
@@ -385,9 +385,9 @@ export default function AutoSendSettingsCard() {
 
                         <div className="flex items-center justify-between gap-3">
                             <div className="flex flex-col">
-                                <span className="text-sm font-medium">Dry run</span>
+                                <span className="text-sm font-medium">Test mode (don&apos;t send yet)</span>
                                 <span className="text-xs text-muted-foreground">
-                                    Recommended first: see which emails would go out without sending any.
+                                    ON: nothing leaves your account — you only see what WOULD be sent. OFF: the emails are really sent.
                                 </span>
                             </div>
                             <Button
@@ -402,16 +402,16 @@ export default function AutoSendSettingsCard() {
 
                         <div className="flex items-center justify-between gap-3">
                             <div className="flex flex-col">
-                                <span className="text-sm font-medium">Daily cap</span>
+                                <span className="text-sm font-medium">Max emails per day</span>
                                 <span className="text-xs text-muted-foreground">
-                                    Maximum initial emails per day (Resend free tier allows 100/day).
+                                    Never send more than this in one day. The Resend free plan allows 100 a day.
                                 </span>
                             </div>
                             <select
                                 value={draft.dailyCap}
                                 onChange={(e) => update({ dailyCap: Number(e.target.value) })}
                                 className="rounded-md border border-input bg-background px-2 py-1 text-sm"
-                                aria-label="Daily cap"
+                                aria-label="Max emails per day"
                             >
                                 {DAILY_CAPS.map(cap => (
                                     <option key={cap} value={cap}>{cap}/day</option>
@@ -421,11 +421,11 @@ export default function AutoSendSettingsCard() {
 
                         <div className="flex items-center justify-between gap-3">
                             <div className="flex flex-col">
-                                <span className="text-sm font-medium">Send window</span>
+                                <span className="text-sm font-medium">Sending hours</span>
                                 <span className="text-xs text-muted-foreground">
                                     {draft.businessHoursEnabled
                                         ? `Only between ${hourLabel(BUSINESS_START_HOUR)} and ${hourLabel(BUSINESS_END_HOUR)} (${settings.timezone}).`
-                                        : `Any time of day or night — all 24 hours (${settings.timezone}).`}
+                                        : `Any hour of the day, all 24 hours (${settings.timezone}).`}
                                 </span>
                             </div>
                             <select
@@ -440,24 +440,24 @@ export default function AutoSendSettingsCard() {
                                         : { businessHoursEnabled: false }
                                 )}
                                 className="rounded-md border border-input bg-background px-2 py-1 text-sm"
-                                aria-label="Send window"
+                                aria-label="Sending hours"
                             >
-                                <option value="anytime">Any time (24/7)</option>
-                                <option value="business">Business hours (09:00–18:00)</option>
+                                <option value="anytime">Any time (24 hours)</option>
+                                <option value="business">Business hours (9am-6pm)</option>
                             </select>
                         </div>
 
                         {saveError && (
                             <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
-                                Nothing was saved: {saveError}
+                                NOT saved: {saveError}
                             </p>
                         )}
 
                         <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
                             <span className="text-xs text-muted-foreground">
                                 {isDirty
-                                    ? "Unsaved changes — press Save changes to store them."
-                                    : "Everything here matches what is stored."}
+                                    ? "You have unsaved changes — press Save to store them."
+                                    : "Everything here is saved."}
                             </span>
                             <div className="flex items-center gap-2">
                                 <Button
@@ -466,14 +466,14 @@ export default function AutoSendSettingsCard() {
                                     disabled={!isDirty || isSaving}
                                     onClick={() => { writeDraft(null); setDraft(toDraft(settings)); setSaveError(null); }}
                                 >
-                                    Reset
+                                    Undo
                                 </Button>
                                 <Button
                                     size="sm"
                                     disabled={!isDirty || isSaving}
                                     onClick={() => { void save(); }}
                                 >
-                                    {isSaving ? "Saving..." : "Save changes"}
+                                    {isSaving ? "Saving..." : "Save"}
                                 </Button>
                             </div>
                         </div>
