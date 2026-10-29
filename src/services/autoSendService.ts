@@ -36,6 +36,16 @@ export interface AutoSendReport {
   skipped: string;
 }
 
+/**
+ * A provider-wide limit ("You have reached your daily email sending quota",
+ * a 429, a rate limit) fails every remaining prospect too, so the pass stops
+ * instead of burning a PDF render per attempt.
+ */
+export function isProviderLimitError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return /daily email sending quota|quota|rate limit|too many requests|429/i.test(error);
+}
+
 class AutoSendService {
   async runPass(): Promise<AutoSendReport> {
     const settings = await automationSettingsService.getSettingsOrDefaults();
@@ -90,6 +100,7 @@ class AutoSendService {
     );
 
     let sent = 0;
+    let providerLimit: string | null = null;
 
     for (const prospect of candidates) {
       if (remaining <= 0) break;
@@ -104,11 +115,11 @@ class AutoSendService {
       }
 
       if (settings.dryRun) {
-        // Dry run: say what WOULD happen, send nothing, keep the cap untouched.
+        // Test mode: say what WOULD happen, send nothing, keep the cap untouched.
         await notificationService.notify({
           type: "EMAIL_SENT",
-          title: `Dry run — would email: ${name}`,
-          body: `Would send to ${email}. Auto-send is in dry-run mode, so nothing was sent. Open Notifications settings to switch it live.`,
+          title: `Test mode — would email: ${name}`,
+          body: `Would send to ${email}. Test mode is ON, so nothing was sent. Open Notifications settings to start sending for real.`,
           href: `/dashboard/pipeline/${prospect.id}`,
           prospectId: prospect.id,
           businessId: prospect.businessId,
@@ -124,11 +135,37 @@ class AutoSendService {
         remaining -= 1;
       } else {
         logger.warn(`[AutoSendService] Skipped ${prospect.id}: ${result.error}`);
+
+        // A provider-wide limit (Resend daily quota / rate limit) will fail
+        // every remaining prospect too, and each attempt costs a PDF render
+        // and a FAILED record. Stop the pass and retry after it resets.
+        if (isProviderLimitError(result.error)) {
+          providerLimit = result.error;
+          break;
+        }
       }
     }
 
+    if (providerLimit) {
+      logger.warn(`[AutoSendService] Pass stopped early: ${providerLimit}`);
+      await notificationService.notify({
+        type: "AUTOMATION_ISSUE",
+        title: "Email provider limit reached — sending paused",
+        body: `${providerLimit.slice(0, 200)} ${candidates.length - sent} prospect(s) stay queued and are retried after the limit resets.`,
+        dedupeKey: "email-provider-limit",
+      });
+
+      return {
+        ran: true,
+        dryRun: false,
+        candidates: candidates.length,
+        sent,
+        skipped: `email provider limit reached after ${sent} send(s) — the rest stay queued`,
+      };
+    }
+
     logger.info(
-      `[AutoSendService] Pass complete — ${candidates.length} candidate(s), ${sent} sent${settings.dryRun ? " (dry run)" : ""}.`
+      `[AutoSendService] Pass complete — ${candidates.length} candidate(s), ${sent} sent${settings.dryRun ? " (test mode)" : ""}.`
     );
 
     return {
