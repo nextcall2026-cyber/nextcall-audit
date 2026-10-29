@@ -15,7 +15,7 @@ export async function GET() {
     );
 
     return NextResponse.json(
-      { error: "Failed to fetch notification settings" },
+      { error: "Failed to fetch notification settings", details: getErrorMessage(error) },
       { status: 500 }
     );
   }
@@ -49,7 +49,7 @@ export async function PATCH(request: NextRequest) {
     );
 
     return NextResponse.json(
-      { error: "Failed to update notification settings" },
+      { error: "Failed to update notification settings", details: getErrorMessage(error) },
       { status: 500 }
     );
   }

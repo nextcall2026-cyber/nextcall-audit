@@ -10,7 +10,8 @@ import { getErrorMessage } from "@/lib/errors";
  * `settings` collection.
  *
  * Safe by default: auto-send starts DISABLED and in DRY-RUN, so turning it on
- * is always a deliberate two-step decision.
+ * is always a deliberate two-step decision. Email may leave at any hour unless
+ * a business-hours window is explicitly switched on.
  */
 
 export interface AutomationSettings {
@@ -19,6 +20,7 @@ export interface AutomationSettings {
   dryRun: boolean;
   /** Hard ceiling on initial emails per calendar day (Resend free tier = 100/day). */
   dailyCap: number;
+  /** When false, sending is allowed around the clock. */
   businessHoursEnabled: boolean;
   startHour: number;
   endHour: number;
@@ -27,36 +29,123 @@ export interface AutomationSettings {
 }
 
 const SETTINGS_DOC_ID = "automation-settings";
+export const MAX_DAILY_CAP = 100;
+export const BUSINESS_HOURS_START = 9;
+export const BUSINESS_HOURS_END = 18;
 
 export function defaultAutomationSettings(): AutomationSettings {
   return {
     autoSendEnabled: false,
     dryRun: true,
     dailyCap: 20,
-    businessHoursEnabled: true,
-    startHour: 9,
-    endHour: 18,
+    // Any time of day by default: no hour window to trip over.
+    businessHoursEnabled: false,
+    startHour: BUSINESS_HOURS_START,
+    endHour: BUSINESS_HOURS_END,
     timezone: "Asia/Dhaka",
     updatedAt: new Date(0).toISOString(),
   };
 }
 
+function clampInt(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(parsed)));
+}
+
+/**
+ * Coerces a stored document into a complete settings object.
+ *
+ * Only fields declared on AutomationSettings survive. The stored document also
+ * carries the data layer's own key `_id`, and that must never travel back into
+ * an update: Astra DB rejects any `$set` that touches `_id` ("_id field cannot
+ * be updated using update operators"), so the whole write used to be thrown
+ * away while the API still answered 200.
+ */
+function normalizeSettings(raw: unknown): AutomationSettings {
+  const defaults = defaultAutomationSettings();
+  const source = (raw ?? {}) as Record<string, unknown>;
+
+  return {
+    autoSendEnabled:
+      typeof source.autoSendEnabled === "boolean"
+        ? source.autoSendEnabled
+        : defaults.autoSendEnabled,
+    dryRun:
+      typeof source.dryRun === "boolean" ? source.dryRun : defaults.dryRun,
+    dailyCap: clampInt(source.dailyCap, defaults.dailyCap, 0, MAX_DAILY_CAP),
+    businessHoursEnabled:
+      typeof source.businessHoursEnabled === "boolean"
+        ? source.businessHoursEnabled
+        : defaults.businessHoursEnabled,
+    startHour: clampInt(source.startHour, defaults.startHour, 0, 23),
+    endHour: clampInt(source.endHour, defaults.endHour, 0, 23),
+    timezone:
+      typeof source.timezone === "string" && source.timezone.trim()
+        ? source.timezone.trim()
+        : defaults.timezone,
+    updatedAt:
+      typeof source.updatedAt === "string"
+        ? source.updatedAt
+        : defaults.updatedAt,
+  };
+}
+
+/**
+ * Exactly the columns written to the settings document — an allow-list, never
+ * a spread of whatever came back from the database.
+ */
+function toDocument(settings: AutomationSettings): Record<string, unknown> {
+  return {
+    id: SETTINGS_DOC_ID,
+    autoSendEnabled: settings.autoSendEnabled,
+    dryRun: settings.dryRun,
+    dailyCap: settings.dailyCap,
+    businessHoursEnabled: settings.businessHoursEnabled,
+    startHour: settings.startHour,
+    endHour: settings.endHour,
+    timezone: settings.timezone,
+    updatedAt: settings.updatedAt,
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 class AutomationSettingsService {
+  private async readDocument(): Promise<unknown | null> {
+    const collection = await getSettingsCollection();
+    return collection.findOne({ id: SETTINGS_DOC_ID });
+  }
+
+  /**
+   * Stored settings. Throws when storage cannot be read, so the dashboard can
+   * say "could not load" instead of showing plausible-looking defaults that
+   * are not what is actually saved.
+   */
   async getSettings(): Promise<AutomationSettings> {
-    const defaults = defaultAutomationSettings();
+    return normalizeSettings(await this.readDocument());
+  }
+
+  /**
+   * Stored settings for the automation paths, which must keep running even if
+   * storage hiccups. Defaults are the safe answer: auto-send off.
+   */
+  async getSettingsOrDefaults(): Promise<AutomationSettings> {
     try {
-      const collection = await getSettingsCollection();
-      const doc = (await collection.findOne({ id: SETTINGS_DOC_ID })) as
-        | Partial<AutomationSettings>
-        | null;
-      if (!doc) return defaults;
-      return { ...defaults, ...doc };
+      return await this.getSettings();
     } catch (error) {
       logger.error(
         "[AutomationSettingsService] Failed to load settings:",
         getErrorMessage(error)
       );
-      return defaults;
+      return defaultAutomationSettings();
     }
   }
 
@@ -64,27 +153,53 @@ class AutomationSettingsService {
     patch: Partial<Omit<AutomationSettings, "updatedAt">>
   ): Promise<AutomationSettings> {
     const current = await this.getSettings();
+    const merged = normalizeSettings({ ...current, ...patch });
     const next: AutomationSettings = {
-      ...current,
-      ...patch,
+      ...merged,
       updatedAt: new Date().toISOString(),
     };
 
     try {
       const collection = await getSettingsCollection();
-      await collection.updateOne(
+      const result = await collection.updateOne(
         { id: SETTINGS_DOC_ID },
-        { $set: { ...next, id: SETTINGS_DOC_ID } },
+        { $set: toDocument(next) },
         { upsert: true }
       );
+
+      if (!result.matchedCount && !result.upsertedId) {
+        throw new Error(
+          "The settings document was neither matched nor created by the update."
+        );
+      }
     } catch (error) {
       logger.error(
         "[AutomationSettingsService] Failed to save settings:",
         getErrorMessage(error)
       );
+      throw error;
     }
 
+    // Only report success once the new values are actually in storage.
+    await this.assertPersisted(next.updatedAt);
     return next;
+  }
+
+  /**
+   * Read the document back and confirm it holds the values just written. This
+   * is what makes "Saved" mean saved — the old code reported success while the
+   * write was rejected, so the previous values came back on the next load.
+   */
+  private async assertPersisted(expectedUpdatedAt: string): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const stored = normalizeSettings(await this.readDocument());
+      if (stored.updatedAt === expectedUpdatedAt) return;
+      await delay(150 * (attempt + 1));
+    }
+
+    throw new Error(
+      "Settings were written but the stored document did not change."
+    );
   }
 }
 

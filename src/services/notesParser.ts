@@ -79,6 +79,24 @@ const NO_SOCIAL_RE =
 // No /g flag: test() on a global regex keeps lastIndex state between calls.
 const CONTACT_FORM_RE = /\bcontact\s+(?:form|us|page|section)\b/i;
 
+// A pasted website audit usually states the postal address on a labelled line:
+// "Address: 123 Main St, Columbia, SC 29201". Both the labelled line and a
+// strict US street/city/state/ZIP pattern are tried, in that order.
+const LABELED_ADDRESS_RE =
+  /(?:^|\n)\s*(?:business\s+|company\s+|office\s+|postal\s+)?(?:address|location|headquarters|hq)\s*[:\-–]\s*([^\n]{5,200})/i;
+const US_FULL_ADDRESS_RE =
+  /\b(\d{1,6}[A-Za-z0-9 .'#-]{0,60}?),\s*([A-Za-z .'-]{2,40}?),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)\b/;
+const CITY_STATE_ZIP_RE = /\b([A-Z][A-Za-z .'-]{1,30}),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)\b/;
+const EMPTY_ADDRESS_RE =
+  /^(?:n\/?a|none|null|unknown|not\s+(?:listed|available|provided|found|stated)|no\s+address|[-–]+)$/i;
+
+export interface ParsedLocation {
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+}
+
 export interface ParsedNotes {
   socialProfiles: SocialProfile[];
   booking: BookingData | null;
@@ -86,6 +104,8 @@ export interface ParsedNotes {
   phone: string | null;
   website: string | null;
   mentionsContactForm: boolean;
+  /** Postal address stated in the notes, when one can be read reliably. */
+  location: ParsedLocation | null;
 }
 
 function normalizeUrl(raw: string): string {
@@ -108,6 +128,48 @@ function hostOf(normalized: string): string {
   } catch {
     return normalized.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "");
   }
+}
+
+/**
+ * Reads a postal address out of free text. Deliberately conservative: a
+ * labelled line or a complete US street/city/state/ZIP run only, so a pasted
+ * audit cannot fill the record with half a sentence.
+ */
+function parseLocation(notes: string): ParsedLocation | null {
+  const labelled = LABELED_ADDRESS_RE.exec(notes)?.[1]?.trim() ?? null;
+  const source = labelled ?? notes;
+
+  const full = US_FULL_ADDRESS_RE.exec(source);
+  if (full) {
+    const address = full[1].trim().replace(/\s+/g, " ");
+    if (address.length >= 5) {
+      return {
+        address,
+        city: full[2].trim(),
+        state: full[3].toUpperCase(),
+        zip: full[4],
+      };
+    }
+  }
+
+  const cityStateZip = CITY_STATE_ZIP_RE.exec(source);
+  if (cityStateZip) {
+    return {
+      city: cityStateZip[1].trim(),
+      state: cityStateZip[2].toUpperCase(),
+      zip: cityStateZip[3],
+    };
+  }
+
+  // A labelled line without a recognisable structure: keep it only when it is
+  // long enough to be an address and short enough not to be prose.
+  if (labelled && labelled.length >= 8 && labelled.length <= 160 && !EMPTY_ADDRESS_RE.test(labelled)) {
+    if (!/https?:\/\/|@/.test(labelled)) {
+      return { address: labelled.replace(/\s+/g, " ") };
+    }
+  }
+
+  return null;
 }
 
 export function parseBusinessNotes(notes: string): ParsedNotes {
@@ -225,7 +287,15 @@ export function parseBusinessNotes(notes: string): ParsedNotes {
   // Generic website = first URL that is not social, booking or email
   const website: string | null = genericUrls[0] ?? null;
 
-  return { socialProfiles, booking, emails, phone, website, mentionsContactForm: CONTACT_FORM_RE.test(notes) };
+  return {
+    socialProfiles,
+    booking,
+    emails,
+    phone,
+    website,
+    mentionsContactForm: CONTACT_FORM_RE.test(notes),
+    location: parseLocation(notes),
+  };
 }
 
 /**

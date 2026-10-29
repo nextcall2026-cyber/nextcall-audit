@@ -18,7 +18,7 @@ import { getErrorMessage } from "@/lib/errors";
 class DailyDigestService {
   async maybeSendDigest(): Promise<{ sent: boolean }> {
     try {
-      const settings = await automationSettingsService.getSettings();
+      const settings = await automationSettingsService.getSettingsOrDefaults();
       const dayStart = startOfDayIso(settings.timezone);
 
       const sentToday = await outreachPersistenceService.countSentSince(dayStart);

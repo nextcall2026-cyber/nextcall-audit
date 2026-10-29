@@ -15,6 +15,7 @@ import { ValidationError, getErrorMessage } from "@/lib/errors";
 import { priorityService } from "@/services/priorityService";
 import { reportService } from "@/services/reportService";
 import { buildOutreachEmail } from "@/services/outreachEmailBuilder";
+import { pickBestEmailForBusiness } from "@/services/contactEmailPicker";
 
 /**
  * The single code path that sends the INITIAL audit email.
@@ -32,9 +33,25 @@ export type SendInitialOutcome =
 class OutreachSendService {
   async sendInitialOutreach(prospectId: string): Promise<SendInitialOutcome> {
     // 1. Fetch Prospect
-    const prospect = await prospectPersistenceService.getProspectById(prospectId);
+    let prospect = await prospectPersistenceService.getProspectById(prospectId);
     if (!prospect) {
       return { ok: false, status: 400, error: "Prospect not found." };
+    }
+
+    // 1a. No address on the prospect yet: use the best one the audit found
+    // (owner-looking mailbox first, then the first plausible address) instead
+    // of blocking the send, and store it so the pipeline page shows the same
+    // address afterwards.
+    if (!prospect.contactEmail) {
+      const business = await persistenceService.getBusinessById(prospect.businessId);
+      const resolved = pickBestEmailForBusiness(business);
+      if (resolved) {
+        await prospectPersistenceService.updateContactEmail(prospect.id, resolved);
+        prospect = { ...prospect, contactEmail: resolved };
+        logger.info(
+          `[OutreachSendService] Resolved contact email for ${prospect.id} from the audit: ${resolved}`
+        );
+      }
     }
 
     // 1b. One-business-one-email guard: if this exact address already received

@@ -4,6 +4,7 @@ import { persistenceService } from "@/services/persistenceService";
 import { prospectPersistenceService } from "@/services/prospectPersistenceService";
 import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
+import { pickBestEmailForBusiness } from "@/services/contactEmailPicker";
 import { logger } from "@/lib/logger";
 import { SocialProfile, CrawlMetadata } from "@/types";
 
@@ -73,12 +74,31 @@ export async function GET(
     const latestAudit = await auditPersistenceService.getLatestAudit(prospect.businessId);
     const outreachHistory = await outreachPersistenceService.getOutreachHistory(prospect.id);
 
+    // Auto-fill the contact email from what the audit found when the prospect
+    // does not have one yet, so the detail page opens with the address already
+    // in the box instead of waiting to be pasted by hand. Persisted, so every
+    // send path (manual button, auto-send, follow-ups) sees the same address.
+    let effectiveProspect = prospect;
+    let contactEmailAutoFilled = false;
+    if (!prospect.contactEmail) {
+      const resolved = pickBestEmailForBusiness(business);
+      if (resolved) {
+        await prospectPersistenceService.updateContactEmail(prospect.id, resolved);
+        effectiveProspect = { ...prospect, contactEmail: resolved };
+        contactEmailAutoFilled = true;
+        logger.info(
+          `[API /prospects/[id]] Auto-filled contact email for ${prospect.id} from the audit: ${resolved}`
+        );
+      }
+    }
+
     return NextResponse.json({
-      prospect,
+      prospect: effectiveProspect,
       business,
       audit: latestAudit?.audit || null,
       aiReport: latestAudit?.aiReport || null,
       outreachHistory,
+      contactEmailAutoFilled,
     });
   } catch (error) {
     logger.error("[API /prospects/[id]] Fetch failed:", getErrorMessage(error));

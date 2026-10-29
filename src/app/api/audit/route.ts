@@ -5,6 +5,7 @@ import { auditPersistenceService } from "@/services/auditPersistenceService";
 import { auditEngine } from "@/services/auditService";
 import { prospectPersistenceService } from "@/services/prospectPersistenceService";
 import { mergeNotesIntoEnrichment, parseBusinessNotes } from "@/services/notesParser";
+import { applyWebsiteAuditBackfill } from "@/services/websiteAuditBackfill";
 import { aiReportService } from "@/services/aiReportService";
 import { logger } from "@/lib/logger";
 import { priorityService } from "@/services/priorityService";
@@ -66,8 +67,9 @@ export async function POST(request: NextRequest) {
       .join("\n")
       .trim();
 
-    if (ownerNotes) {
-      const parsedNotes = parseBusinessNotes(ownerNotes);
+    const parsedNotes = ownerNotes ? parseBusinessNotes(ownerNotes) : null;
+
+    if (parsedNotes) {
       const baseEnrichment: EnrichmentData = business.enrichment ?? { status: "NOT_STARTED" };
       const mergedEnrichment = mergeNotesIntoEnrichment(baseEnrichment, parsedNotes);
 
@@ -80,6 +82,12 @@ export async function POST(request: NextRequest) {
       // deterministic audit and the AI report below.
       business = { ...business, enrichment: mergedEnrichment, notes: ownerNotes };
     }
+
+    // 1c. Fill whatever the profile is missing — postal address from the
+    // website audit text, and the best contact email among the addresses that
+    // audit mentions. Runs behind the scenes before the AI report is written,
+    // so the report and the outreach email both use the complete profile.
+    business = await applyWebsiteAuditBackfill(businessId, business, parsedNotes);
 
     const thirtyDaysMs = 2592000000;
 

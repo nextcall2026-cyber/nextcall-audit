@@ -84,27 +84,95 @@ function isQuietHour(settings: NotificationSettings, hour: number): boolean {
   return start < end ? hour >= start && hour < end : hour >= start || hour < end;
 }
 
+function clampHour(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(23, Math.max(0, Math.round(parsed)));
+}
+
+/**
+ * Coerces a stored document into complete settings.
+ *
+ * Only declared fields survive. The stored document also carries the data
+ * layer's own key `_id`, and that must never be written back: Astra DB rejects
+ * any `$set` that touches `_id` ("_id field cannot be updated using update
+ * operators"), so the entire update was discarded while the API still
+ * answered 200 and the card still said "Saved".
+ */
+function normalizeSettings(raw: unknown): NotificationSettings {
+  const defaults = defaultSettings();
+  const source = (raw ?? {}) as Record<string, unknown>;
+  const storedEnabled = (source.enabled ?? {}) as Record<string, unknown>;
+
+  const enabled = {} as Record<NotificationType, boolean>;
+  for (const type of NOTIFICATION_TYPES) {
+    enabled[type] =
+      typeof storedEnabled[type] === "boolean"
+        ? (storedEnabled[type] as boolean)
+        : defaults.enabled[type];
+  }
+
+  return {
+    enabled,
+    quietHoursEnabled:
+      typeof source.quietHoursEnabled === "boolean"
+        ? source.quietHoursEnabled
+        : defaults.quietHoursEnabled,
+    quietStartHour: clampHour(source.quietStartHour, defaults.quietStartHour),
+    quietEndHour: clampHour(source.quietEndHour, defaults.quietEndHour),
+    timezone:
+      typeof source.timezone === "string" && source.timezone.trim()
+        ? source.timezone.trim()
+        : defaults.timezone,
+    updatedAt:
+      typeof source.updatedAt === "string"
+        ? source.updatedAt
+        : defaults.updatedAt,
+  };
+}
+
+/** Exactly the columns written to the settings document. */
+function toDocument(settings: NotificationSettings): Record<string, unknown> {
+  return {
+    id: SETTINGS_DOC_ID,
+    enabled: settings.enabled,
+    quietHoursEnabled: settings.quietHoursEnabled,
+    quietStartHour: settings.quietStartHour,
+    quietEndHour: settings.quietEndHour,
+    timezone: settings.timezone,
+    updatedAt: settings.updatedAt,
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class NotificationService {
-  /** Reads the stored settings, filling in defaults for missing keys. */
+  /**
+   * Reads the stored settings, filling in defaults for missing keys. Throws
+   * when storage cannot be read, so the dashboard can say "could not load"
+   * instead of showing plausible-looking defaults that are not really saved.
+   */
   async getSettings(): Promise<NotificationSettings> {
-    const defaults = defaultSettings();
+    const collection = await getSettingsCollection();
+    const doc = await collection.findOne({ id: SETTINGS_DOC_ID });
+    return normalizeSettings(doc);
+  }
+
+  /**
+   * Settings for the feed itself: it must keep working even when storage
+   * hiccups, and the defaults mean "everything on", so no alert is lost.
+   */
+  async getSettingsOrDefaults(): Promise<NotificationSettings> {
     try {
-      const collection = await getSettingsCollection();
-      const doc = (await collection.findOne({ id: SETTINGS_DOC_ID })) as
-        | (Partial<NotificationSettings> & { id?: string })
-        | null;
-      if (!doc) return defaults;
-      return {
-        ...defaults,
-        ...doc,
-        enabled: { ...defaults.enabled, ...(doc.enabled ?? {}) },
-      };
+      return await this.getSettings();
     } catch (error) {
       logger.error(
         "[NotificationService] Failed to load settings:",
         getErrorMessage(error)
       );
-      return defaults;
+      return defaultSettings();
     }
   }
 
@@ -112,7 +180,7 @@ export class NotificationService {
     patch: Partial<Omit<NotificationSettings, "updatedAt">>
   ): Promise<NotificationSettings> {
     const current = await this.getSettings();
-    const next: NotificationSettings = {
+    const next = normalizeSettings({
       ...current,
       enabled: { ...current.enabled, ...(patch.enabled ?? {}) },
       quietHoursEnabled: patch.quietHoursEnabled ?? current.quietHoursEnabled,
@@ -120,23 +188,51 @@ export class NotificationService {
       quietEndHour: patch.quietEndHour ?? current.quietEndHour,
       timezone: patch.timezone ?? current.timezone,
       updatedAt: new Date().toISOString(),
-    };
+    });
 
     try {
       const collection = await getSettingsCollection();
-      await collection.updateOne(
+      const result = await collection.updateOne(
         { id: SETTINGS_DOC_ID },
-        { $set: { ...next, id: SETTINGS_DOC_ID } },
+        { $set: toDocument(next) },
         { upsert: true }
       );
+
+      if (!result.matchedCount && !result.upsertedId) {
+        throw new Error(
+          "The settings document was neither matched nor created by the update."
+        );
+      }
     } catch (error) {
       logger.error(
         "[NotificationService] Failed to save settings:",
         getErrorMessage(error)
       );
+      throw error;
     }
 
+    // Only report success once the new values are actually in storage.
+    await this.assertPersisted(next.updatedAt);
     return next;
+  }
+
+  /**
+   * Reads the document back and confirms it holds the values just written.
+   * This is what makes "Saved" mean saved.
+   */
+  private async assertPersisted(expectedUpdatedAt: string): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const collection = await getSettingsCollection();
+      const stored = normalizeSettings(
+        await collection.findOne({ id: SETTINGS_DOC_ID })
+      );
+      if (stored.updatedAt === expectedUpdatedAt) return;
+      await delay(150 * (attempt + 1));
+    }
+
+    throw new Error(
+      "Settings were written but the stored document did not change."
+    );
   }
 
   /**
@@ -146,7 +242,7 @@ export class NotificationService {
    */
   async notify(input: NotifyInput): Promise<AppNotification | null> {
     try {
-      const settings = await this.getSettings();
+      const settings = await this.getSettingsOrDefaults();
 
       if (!input.force && settings.enabled[input.type] === false) {
         logger.debug(`[NotificationService] Skipped ${input.type} (disabled).`);

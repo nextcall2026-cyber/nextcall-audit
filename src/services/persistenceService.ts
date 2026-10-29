@@ -1,5 +1,5 @@
 import "server-only";
-import { Business, EnrichmentData } from "@/types";
+import { Business, BusinessLocation, EnrichmentData } from "@/types";
 import { getBusinessesCollection, withDbRetry } from "@/lib/db";
 import { logger } from "@/lib/logger";
 
@@ -87,12 +87,16 @@ export class PersistenceService {
 
   async upsertBusiness(business: Business): Promise<void> {
     const collection = await withDbRetry(() => getBusinessesCollection());
+    // Never write the data layer's own `_id` back: Astra DB rejects any $set
+    // that touches it, which discards the whole document write.
+    const { _id: _ignoredId, ...fields } = business as Business & { _id?: unknown };
+    void _ignoredId;
     await withDbRetry(() =>
       collection.updateOne(
         { id: business.id },
         {
           $set: {
-            ...business,
+            ...fields,
             updatedAt: new Date().toISOString(),
           },
           $setOnInsert: {
@@ -102,6 +106,23 @@ export class PersistenceService {
         { upsert: true }
       )
     );
+  }
+
+  /**
+   * Patches the business's own core fields (postal address, phone) without
+   * touching discovery data or enrichment. Used when the website audit fills
+   * in what the Google Business Profile screenshot left blank.
+   */
+  async updateBusinessCore(
+    id: string,
+    patch: { location?: BusinessLocation; phone?: string }
+  ): Promise<void> {
+    const $set: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (patch.location !== undefined) $set.location = patch.location;
+    if (patch.phone !== undefined) $set.phone = patch.phone;
+
+    const collection = await withDbRetry(() => getBusinessesCollection());
+    await withDbRetry(() => collection.updateOne({ id }, { $set }));
   }
 
 async updateEnrichmentData(id: string, enrichment: EnrichmentData): Promise<void> {

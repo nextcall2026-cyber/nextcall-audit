@@ -21,6 +21,8 @@ interface ProspectDetailData {
     audit: AuditResult | null;
     aiReport: AuditReport | null;
     outreachHistory: OutreachRecord[];
+    /** True when the contact email on screen was filled from the audit. */
+    contactEmailAutoFilled?: boolean;
 }
 
 const PIPELINE_STATUSES: PipelineStatus[] = [
@@ -350,6 +352,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
     const typedEmail = emailInput.trim();
     const typedEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typedEmail);
     const hasUsableEmail = typedEmailValid || !!prospect.contactEmail;
+    const contactEmailAutoFilled = data?.contactEmailAutoFilled === true;
     const hasBeenContacted = prospect.outreachState !== 'UNCONTACTED';
     const isStopStatus = STOP_PIPELINE_STATUSES.includes(prospect.pipelineStatus) || STOP_OUTREACH_STATES.includes(prospect.outreachState) || prospect.isSuppressed;
     const sortedHistory = [...outreachHistory].sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime());
@@ -920,6 +923,11 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                                         {isSavingEmail ? "Saving..." : "Save Email"}
                                     </Button>
                                 </div>
+                                {contactEmailAutoFilled && hasUsableEmail && (
+                                    <p className="text-[10px] text-emerald-600 mt-1">
+                                        Auto-filled from the website audit — change it if you want a different address.
+                                    </p>
+                                )}
                                 {!hasUsableEmail && (
                                     <p className="text-[10px] text-yellow-600 mt-1">
                                         Enter an email above so the audit can be sent.

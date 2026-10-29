@@ -12,6 +12,7 @@ import { auditEngine } from "@/services/auditService";
 import { aiReportService } from "@/services/aiReportService";
 import { priorityService } from "@/services/priorityService";
 import { mergeNotesIntoEnrichment, parseBusinessNotes } from "@/services/notesParser";
+import { applyWebsiteAuditBackfill } from "@/services/websiteAuditBackfill";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 
@@ -225,6 +226,7 @@ export async function POST(request: NextRequest) {
       phone: null,
       website: null,
       mentionsContactForm: false,
+      location: null,
     };
     const parsedWithUserEmail = userEmail
       ? {
@@ -247,7 +249,18 @@ export async function POST(request: NextRequest) {
       mergedEnrichment.preferredEmail = userEmail;
     }
     await persistenceService.updateEnrichmentData(id, mergedEnrichment);
-    const enrichedBusiness: Business = { ...business, enrichment: mergedEnrichment };
+    let enrichedBusiness: Business = { ...business, enrichment: mergedEnrichment };
+
+    // 2b. Behind the scenes: fill in what the Google Business Profile
+    // screenshot left blank (postal address, contact email) from the website
+    // audit the user pasted into the notes box. Nothing is shown in the UI and
+    // nothing already set is overwritten; the audit, the AI report and the
+    // outreach email all read this same profile.
+    enrichedBusiness = await applyWebsiteAuditBackfill(
+      id,
+      enrichedBusiness,
+      parsedWithUserEmail
+    );
 
     // 3. Run the deterministic audit + AI report
     const auditResult = await auditEngine.runAudit(enrichedBusiness);

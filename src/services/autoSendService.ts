@@ -5,6 +5,7 @@ import { persistenceService } from "@/services/persistenceService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
 import { notificationService } from "@/services/notificationService";
 import { outreachSendService } from "@/services/outreachSendService";
+import { pickBestEmailForBusiness } from "@/services/contactEmailPicker";
 import {
   automationSettingsService,
   currentHourInTimezone,
@@ -20,7 +21,7 @@ import { logger } from "@/lib/logger";
  * Guardrails (all configurable):
  *   - OFF by default, and DRY-RUN by default — enabling real sending is a
  *     deliberate two-step decision.
- *   - business hours only, in the configured timezone
+ *   - any hour by default; an optional business-hours window can be switched on
  *   - hard daily cap (counted from real SENT records, not attempts)
  *   - only NEW / UNCONTACTED prospects with a contact email and no suppression
  *   - the actual send reuses outreachSendService, so every safety rail
@@ -37,7 +38,7 @@ export interface AutoSendReport {
 
 class AutoSendService {
   async runPass(): Promise<AutoSendReport> {
-    const settings = await automationSettingsService.getSettings();
+    const settings = await automationSettingsService.getSettingsOrDefaults();
 
     if (!settings.autoSendEnabled) {
       return {
@@ -56,7 +57,9 @@ class AutoSendService {
         dryRun: settings.dryRun,
         candidates: 0,
         sent: 0,
-        skipped: `outside business hours (${hour}:00 ${settings.timezone})`,
+        skipped: settings.businessHoursEnabled
+          ? `outside the send window (${hour}:00 ${settings.timezone})`
+          : "outside the send window",
       };
     }
 
@@ -76,11 +79,13 @@ class AutoSendService {
     }
 
     const prospects = await prospectPersistenceService.getAllProspects();
+    // The contact email is resolved per candidate below (prospect first, then
+    // the best address the audit/website found), so a prospect whose address
+    // was never copied out of the audit still gets its email.
     const candidates = prospects.filter(
       (p) =>
         p.pipelineStatus === "NEW" &&
         p.outreachState === "UNCONTACTED" &&
-        Boolean(p.contactEmail) &&
         !p.isSuppressed
     );
 
@@ -91,13 +96,19 @@ class AutoSendService {
 
       const business = await persistenceService.getBusinessById(prospect.businessId);
       const name = business?.name || prospect.businessSnapshot?.name || "Unknown business";
+      const email = prospect.contactEmail ?? pickBestEmailForBusiness(business);
+
+      if (!email) {
+        logger.info(`[AutoSendService] Skipped ${prospect.id}: no contact email in the audit or profile.`);
+        continue;
+      }
 
       if (settings.dryRun) {
         // Dry run: say what WOULD happen, send nothing, keep the cap untouched.
         await notificationService.notify({
           type: "EMAIL_SENT",
           title: `Dry run — would email: ${name}`,
-          body: "Auto-send is in dry-run mode, so nothing was sent. Open Notifications settings to switch it live.",
+          body: `Would send to ${email}. Auto-send is in dry-run mode, so nothing was sent. Open Notifications settings to switch it live.`,
           href: `/dashboard/pipeline/${prospect.id}`,
           prospectId: prospect.id,
           businessId: prospect.businessId,

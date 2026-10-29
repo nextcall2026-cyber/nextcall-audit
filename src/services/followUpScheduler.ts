@@ -13,6 +13,15 @@ let started = false;
  */
 export function startFollowUpScheduler(): void {
   if (started) return;
+
+  // Escape hatch for local work against the real database: FOLLOWUP_AUTOMATION=off
+  // keeps the sweep from firing from a dev server. Automation stays ON unless
+  // that value is set explicitly.
+  if (process.env.FOLLOWUP_AUTOMATION === "off") {
+    logger.info("[FollowUpScheduler] FOLLOWUP_AUTOMATION=off — follow-up automation not started.");
+    return;
+  }
+
   started = true;
 
   setTimeout(() => {

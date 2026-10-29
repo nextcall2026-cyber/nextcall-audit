@@ -10,7 +10,10 @@ export async function GET() {
     return NextResponse.json({ settings });
   } catch (error) {
     logger.error("[API /automation/settings] Fetch failed:", getErrorMessage(error));
-    return NextResponse.json({ error: "Failed to fetch automation settings" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to fetch automation settings", details: getErrorMessage(error) },
+      { status: 500 }
+    );
   }
 }
 
@@ -39,6 +42,9 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ settings });
   } catch (error) {
     logger.error("[API /automation/settings] Update failed:", getErrorMessage(error));
-    return NextResponse.json({ error: "Failed to update automation settings" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to update automation settings", details: getErrorMessage(error) },
+      { status: 500 }
+    );
   }
 }

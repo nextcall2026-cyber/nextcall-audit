@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
@@ -18,31 +19,155 @@ interface AutomationSettingsShape {
     updatedAt: string;
 }
 
-const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
+type EditableKey =
+    | "autoSendEnabled"
+    | "dryRun"
+    | "dailyCap"
+    | "businessHoursEnabled"
+    | "startHour"
+    | "endHour";
+
+type Draft = Pick<AutomationSettingsShape, EditableKey>;
+
+const EDITABLE_KEYS: EditableKey[] = [
+    "autoSendEnabled",
+    "dryRun",
+    "dailyCap",
+    "businessHoursEnabled",
+    "startHour",
+    "endHour",
+];
+
+const DAILY_CAPS = [5, 10, 20, 30, 50, 100];
+
+/** Preset used when the optional business-hours window is switched on. */
+const BUSINESS_START_HOUR = 9;
+const BUSINESS_END_HOUR = 18;
+
 const hourLabel = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
 
+function toDraft(settings: AutomationSettingsShape): Draft {
+    return {
+        autoSendEnabled: settings.autoSendEnabled,
+        dryRun: settings.dryRun,
+        dailyCap: settings.dailyCap,
+        businessHoursEnabled: settings.businessHoursEnabled,
+        startHour: settings.startHour,
+        endHour: settings.endHour,
+    };
+}
+
+function sameDraft(a: Draft, b: Draft): boolean {
+    return EDITABLE_KEYS.every((key) => a[key] === b[key]);
+}
+
 /**
- * Auto-send controls. Both switches start OFF (auto-send disabled, dry run
- * on), so going live is always two deliberate clicks.
+ * An unsaved draft lives in sessionStorage rather than React state on purpose:
+ * the dashboard re-renders its server tree whenever a new notification arrives
+ * (router.refresh), which remounts this card. Edits the user has not saved yet
+ * must not disappear with it — that is exactly the "it changed back by itself"
+ * feeling this card had.
+ */
+const DRAFT_KEY = "nextcall:auto-send-draft";
+
+function readDraft(): Draft | null {
+    if (typeof window === "undefined") return null;
+    try {
+        const raw = window.sessionStorage.getItem(DRAFT_KEY);
+        if (!raw) return null;
+        const p = JSON.parse(raw) as Record<string, unknown>;
+        if (
+            typeof p.autoSendEnabled !== "boolean" ||
+            typeof p.dryRun !== "boolean" ||
+            typeof p.businessHoursEnabled !== "boolean" ||
+            typeof p.dailyCap !== "number" ||
+            typeof p.startHour !== "number" ||
+            typeof p.endHour !== "number"
+        ) {
+            return null;
+        }
+        return {
+            autoSendEnabled: p.autoSendEnabled,
+            dryRun: p.dryRun,
+            dailyCap: p.dailyCap,
+            businessHoursEnabled: p.businessHoursEnabled,
+            startHour: p.startHour,
+            endHour: p.endHour,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function writeDraft(draft: Draft | null): void {
+    if (typeof window === "undefined") return;
+    try {
+        if (draft) window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+        else window.sessionStorage.removeItem(DRAFT_KEY);
+    } catch {
+        // Private mode / storage disabled: the draft simply stays in memory.
+    }
+}
+
+/**
+ * Auto-send controls.
+ *
+ * Edits stay local until "Save changes" is pressed, so a half-finished change
+ * never reaches the server — and "Saved" only appears after the API has
+ * confirmed the values are really stored.
  */
 export default function AutoSendSettingsCard() {
+    const toast = useToast();
     const [settings, setSettings] = useState<AutomationSettingsShape | null>(null);
+    const [draft, setDraft] = useState<Draft | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
-    const [savedAt, setSavedAt] = useState<string | null>(null);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [saveError, setSaveError] = useState<string | null>(null);
+
+    // Pure fetches (no setState) so the mount effect below can call them
+    // without tripping react-hooks/set-state-in-effect.
+    const fetchSettings = useCallback(async (): Promise<AutomationSettingsShape> => {
+        const res = await fetch("/api/automation/settings", { cache: "no-store" });
+        if (!res.ok) throw new Error(`Request failed (${res.status})`);
+        const data = (await res.json()) as { settings: AutomationSettingsShape };
+        return data.settings;
+    }, []);
+
+    const load = useCallback(async () => {
+        try {
+            const loaded = await fetchSettings();
+            setSettings(loaded);
+            setDraft(readDraft() ?? toDraft(loaded));
+            setLoadError(null);
+        } catch (err) {
+            const message = getErrorMessage(err);
+            logger.error("[AutoSendSettings] Load failed:", message);
+            setLoadError(message);
+            setSettings(null);
+            setDraft(null);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [fetchSettings]);
 
     useEffect(() => {
         let cancelled = false;
 
         const run = async () => {
             try {
-                const res = await fetch("/api/automation/settings");
-                if (!res.ok) throw new Error(`Request failed (${res.status})`);
-                const data = (await res.json()) as { settings: AutomationSettingsShape };
+                const loaded = await fetchSettings();
                 if (cancelled) return;
-                setSettings(data.settings);
+                setSettings(loaded);
+                setDraft(readDraft() ?? toDraft(loaded));
+                setLoadError(null);
             } catch (err) {
-                logger.error("[AutoSendSettings] Load failed:", getErrorMessage(err));
+                if (cancelled) return;
+                const message = getErrorMessage(err);
+                logger.error("[AutoSendSettings] Load failed:", message);
+                setLoadError(message);
+                setSettings(null);
+                setDraft(null);
             } finally {
                 if (!cancelled) setIsLoading(false);
             }
@@ -50,30 +175,85 @@ export default function AutoSendSettingsCard() {
 
         void run();
         return () => { cancelled = true; };
-    }, []);
+    }, [fetchSettings]);
 
-    const save = async (patch: Partial<AutomationSettingsShape>) => {
-        if (!settings) return;
-        setSettings({ ...settings, ...patch });
+    const retry = () => {
+        setIsLoading(true);
+        void load();
+    };
+
+    const isDirty = Boolean(settings && draft && !sameDraft(toDraft(settings), draft));
+
+    const update = (patch: Partial<Draft>) => {
+        if (!draft) return;
+        const next: Draft = { ...draft, ...patch };
+        writeDraft(next);
+        setDraft(next);
+        setSaveError(null);
+    };
+
+    const save = async () => {
+        if (!settings || !draft || isSaving) return;
         setIsSaving(true);
+        setSaveError(null);
         try {
             const res = await fetch("/api/automation/settings", {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(patch),
+                body: JSON.stringify({
+                    autoSendEnabled: draft.autoSendEnabled,
+                    dryRun: draft.dryRun,
+                    dailyCap: draft.dailyCap,
+                    businessHoursEnabled: draft.businessHoursEnabled,
+                    startHour: draft.startHour,
+                    endHour: draft.endHour,
+                }),
             });
-            if (!res.ok) throw new Error(`Request failed (${res.status})`);
-            const data = (await res.json()) as { settings: AutomationSettingsShape };
+
+            const data = (await res.json().catch(() => null)) as
+                | { settings?: AutomationSettingsShape; error?: string; details?: unknown }
+                | null;
+
+            if (!res.ok || !data?.settings) {
+                // A few validators answer before zod runs; keep the message short.
+                const details =
+                    typeof data?.details === "string"
+                        ? data.details
+                        : data?.details
+                          ? JSON.stringify(data.details).slice(0, 200)
+                          : null;
+                throw new Error(data?.error ? `${data.error}${details ? ` — ${details}` : ""}` : `Request failed (${res.status})`);
+            }
+
             setSettings(data.settings);
-            setSavedAt(new Date().toLocaleTimeString());
+            setDraft(toDraft(data.settings));
+            writeDraft(null);
+            toast.success("Auto-send settings saved", "The new values are stored and take effect on the next sweep.");
         } catch (err) {
-            logger.error("[AutoSendSettings] Save failed:", getErrorMessage(err));
+            const message = getErrorMessage(err);
+            logger.error("[AutoSendSettings] Save failed:", message);
+            setSaveError(message);
+            toast.error("Auto-send settings were NOT saved", message);
         } finally {
             setIsSaving(false);
         }
     };
 
-    const isLive = settings?.autoSendEnabled === true && settings?.dryRun === false;
+    const isLive = draft?.autoSendEnabled === true && draft?.dryRun === false;
+    const savedAt =
+        settings && settings.updatedAt !== new Date(0).toISOString()
+            ? new Date(settings.updatedAt).toLocaleString()
+            : null;
+
+    const status = isLoading
+        ? "Loading..."
+        : isSaving
+          ? "Saving..."
+          : isDirty
+            ? "Unsaved changes"
+            : savedAt
+              ? `Saved ${savedAt}`
+              : "Not saved yet";
 
     return (
         <Card>
@@ -82,14 +262,30 @@ export default function AutoSendSettingsCard() {
                     <span aria-hidden>📨</span>
                     <CardTitle className="text-sm font-semibold">Auto-send new audits</CardTitle>
                 </div>
-                <span className="text-xs text-muted-foreground">
-                    {isSaving ? "Saving..." : savedAt ? `Saved ${savedAt}` : "Runs on the automation sweep"}
+                <span
+                    className={cn(
+                        "text-xs",
+                        isDirty ? "font-medium text-amber-700" : "text-muted-foreground"
+                    )}
+                >
+                    {status}
                 </span>
             </CardHeader>
             <CardContent className="space-y-4">
                 {isLoading && <p className="text-sm text-muted-foreground">Loading auto-send settings...</p>}
 
-                {!isLoading && settings && (
+                {!isLoading && loadError && (
+                    <div className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+                        <span>Could not load the saved settings: {loadError}</span>
+                        <div>
+                            <Button variant="outline" size="sm" onClick={retry}>
+                                Retry
+                            </Button>
+                        </div>
+                    </div>
+                )}
+
+                {!isLoading && draft && settings && (
                     <>
                         <div className={cn(
                             "rounded-md border px-3 py-2 text-xs",
@@ -98,7 +294,7 @@ export default function AutoSendSettingsCard() {
                                 : "border-border bg-muted/40 text-muted-foreground"
                         )}>
                             {isLive
-                                ? "LIVE — new prospects will be emailed automatically (business hours + daily cap apply)."
+                                ? `LIVE — new prospects will be emailed automatically (${draft.businessHoursEnabled ? `${hourLabel(BUSINESS_START_HOUR)}–${hourLabel(BUSINESS_END_HOUR)} ${settings.timezone}` : "any time"}, up to ${draft.dailyCap}/day).`
                                 : "Not sending: auto-send is off or in dry run. Dry run writes a feed entry instead of sending."}
                         </div>
 
@@ -110,11 +306,12 @@ export default function AutoSendSettingsCard() {
                                 </span>
                             </div>
                             <Button
-                                variant={settings.autoSendEnabled ? "default" : "outline"}
+                                variant={draft.autoSendEnabled ? "default" : "outline"}
                                 size="sm"
-                                onClick={() => { void save({ autoSendEnabled: !settings.autoSendEnabled }); }}
+                                aria-pressed={draft.autoSendEnabled}
+                                onClick={() => update({ autoSendEnabled: !draft.autoSendEnabled })}
                             >
-                                {settings.autoSendEnabled ? "On" : "Off"}
+                                {draft.autoSendEnabled ? "On" : "Off"}
                             </Button>
                         </div>
 
@@ -126,11 +323,12 @@ export default function AutoSendSettingsCard() {
                                 </span>
                             </div>
                             <Button
-                                variant={settings.dryRun ? "default" : "outline"}
+                                variant={draft.dryRun ? "default" : "outline"}
                                 size="sm"
-                                onClick={() => { void save({ dryRun: !settings.dryRun }); }}
+                                aria-pressed={draft.dryRun}
+                                onClick={() => update({ dryRun: !draft.dryRun })}
                             >
-                                {settings.dryRun ? "On" : "Off"}
+                                {draft.dryRun ? "On" : "Off"}
                             </Button>
                         </div>
 
@@ -142,12 +340,12 @@ export default function AutoSendSettingsCard() {
                                 </span>
                             </div>
                             <select
-                                value={settings.dailyCap}
-                                onChange={(e) => { void save({ dailyCap: Number(e.target.value) }); }}
+                                value={draft.dailyCap}
+                                onChange={(e) => update({ dailyCap: Number(e.target.value) })}
                                 className="rounded-md border border-input bg-background px-2 py-1 text-sm"
                                 aria-label="Daily cap"
                             >
-                                {[5, 10, 20, 30, 50, 100].map(cap => (
+                                {DAILY_CAPS.map(cap => (
                                     <option key={cap} value={cap}>{cap}/day</option>
                                 ))}
                             </select>
@@ -155,42 +353,62 @@ export default function AutoSendSettingsCard() {
 
                         <div className="flex items-center justify-between gap-3">
                             <div className="flex flex-col">
-                                <span className="text-sm font-medium">Business hours only</span>
+                                <span className="text-sm font-medium">Send window</span>
                                 <span className="text-xs text-muted-foreground">
-                                    Send between the hours below ({settings.timezone}).
+                                    {draft.businessHoursEnabled
+                                        ? `Only between ${hourLabel(BUSINESS_START_HOUR)} and ${hourLabel(BUSINESS_END_HOUR)} (${settings.timezone}).`
+                                        : `Any time of day or night — all 24 hours (${settings.timezone}).`}
                                 </span>
                             </div>
-                            <Button
-                                variant={settings.businessHoursEnabled ? "default" : "outline"}
-                                size="sm"
-                                onClick={() => { void save({ businessHoursEnabled: !settings.businessHoursEnabled }); }}
+                            <select
+                                value={draft.businessHoursEnabled ? "business" : "anytime"}
+                                onChange={(e) => update(
+                                    e.target.value === "business"
+                                        ? {
+                                            businessHoursEnabled: true,
+                                            startHour: BUSINESS_START_HOUR,
+                                            endHour: BUSINESS_END_HOUR,
+                                        }
+                                        : { businessHoursEnabled: false }
+                                )}
+                                className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+                                aria-label="Send window"
                             >
-                                {settings.businessHoursEnabled ? "On" : "Off"}
-                            </Button>
+                                <option value="anytime">Any time (24/7)</option>
+                                <option value="business">Business hours (09:00–18:00)</option>
+                            </select>
                         </div>
 
-                        {settings.businessHoursEnabled && (
-                            <div className="flex items-center gap-2 text-sm">
-                                <span className="text-muted-foreground">From</span>
-                                <select
-                                    value={settings.startHour}
-                                    onChange={(e) => { void save({ startHour: Number(e.target.value) }); }}
-                                    className="rounded-md border border-input bg-background px-2 py-1"
-                                    aria-label="Business hours start"
-                                >
-                                    {HOURS.map(hour => <option key={hour} value={hour}>{hourLabel(hour)}</option>)}
-                                </select>
-                                <span className="text-muted-foreground">to</span>
-                                <select
-                                    value={settings.endHour}
-                                    onChange={(e) => { void save({ endHour: Number(e.target.value) }); }}
-                                    className="rounded-md border border-input bg-background px-2 py-1"
-                                    aria-label="Business hours end"
-                                >
-                                    {HOURS.map(hour => <option key={hour} value={hour}>{hourLabel(hour)}</option>)}
-                                </select>
-                            </div>
+                        {saveError && (
+                            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+                                Nothing was saved: {saveError}
+                            </p>
                         )}
+
+                        <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+                            <span className="text-xs text-muted-foreground">
+                                {isDirty
+                                    ? "Unsaved changes — press Save changes to store them."
+                                    : "Everything here matches what is stored."}
+                            </span>
+                            <div className="flex items-center gap-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={!isDirty || isSaving}
+                                    onClick={() => { writeDraft(null); setDraft(toDraft(settings)); setSaveError(null); }}
+                                >
+                                    Reset
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    disabled={!isDirty || isSaving}
+                                    onClick={() => { void save(); }}
+                                >
+                                    {isSaving ? "Saving..." : "Save changes"}
+                                </Button>
+                            </div>
+                        </div>
                     </>
                 )}
             </CardContent>
