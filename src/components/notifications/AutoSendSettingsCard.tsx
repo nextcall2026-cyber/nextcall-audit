@@ -124,6 +124,8 @@ export default function AutoSendSettingsCard() {
     const [isSaving, setIsSaving] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [isRunningPass, setIsRunningPass] = useState(false);
+    const [lastRun, setLastRun] = useState<string | null>(null);
 
     // Pure fetches (no setState) so the mount effect below can call them
     // without tripping react-hooks/set-state-in-effect.
@@ -239,7 +241,53 @@ export default function AutoSendSettingsCard() {
         }
     };
 
+    const runNow = async () => {
+        if (isRunningPass) return;
+        setIsRunningPass(true);
+        setSaveError(null);
+        try {
+            const res = await fetch("/api/automation/sweep", { method: "POST" });
+            const data = (await res.json().catch(() => null)) as
+                | {
+                      autoSend?: { sent: number; candidates: number; skipped: string; dryRun: boolean } | null;
+                      error?: string;
+                      reason?: string;
+                  }
+                | null;
+
+            if (!res.ok) {
+                throw new Error(data?.reason || data?.error || `Request failed (${res.status})`);
+            }
+
+            const pass = data?.autoSend;
+            if (!pass) throw new Error("The pass returned no auto-send result.");
+
+            if (pass.dryRun) {
+                const message = `${pass.candidates} candidate(s) would be emailed. Dry run is on, so nothing was sent.`;
+                setLastRun(`Dry run — ${message}`);
+                toast.info("Dry run — nothing sent", message);
+            } else if (pass.sent > 0) {
+                const message = `${pass.sent} email(s) sent from ${pass.candidates} candidate(s).`;
+                setLastRun(`Just now — ${message}`);
+                toast.success("Audit emails sent", message);
+            } else {
+                const message = pass.skipped || "No prospect was ready to email.";
+                setLastRun(`Just now — ${message}`);
+                toast.info("Automation pass finished", message);
+            }
+        } catch (err) {
+            const message = getErrorMessage(err);
+            logger.error("[AutoSendSettings] Manual pass failed:", message);
+            setSaveError(message);
+            toast.error("Automation pass failed", message);
+        } finally {
+            setIsRunningPass(false);
+        }
+    };
+
     const isLive = draft?.autoSendEnabled === true && draft?.dryRun === false;
+    const isDryRunOnly = draft?.autoSendEnabled === true && draft?.dryRun === true;
+
     const savedAt =
         settings && settings.updatedAt !== new Date(0).toISOString()
             ? new Date(settings.updatedAt).toLocaleString()
@@ -291,11 +339,31 @@ export default function AutoSendSettingsCard() {
                             "rounded-md border px-3 py-2 text-xs",
                             isLive
                                 ? "border-amber-300 bg-amber-50 text-amber-900"
-                                : "border-border bg-muted/40 text-muted-foreground"
+                                : isDryRunOnly
+                                  ? "border-amber-300 bg-amber-50 text-amber-900"
+                                  : "border-border bg-muted/40 text-muted-foreground"
                         )}>
                             {isLive
-                                ? `LIVE — new prospects will be emailed automatically (${draft.businessHoursEnabled ? `${hourLabel(BUSINESS_START_HOUR)}–${hourLabel(BUSINESS_END_HOUR)} ${settings.timezone}` : "any time"}, up to ${draft.dailyCap}/day).`
-                                : "Not sending: auto-send is off or in dry run. Dry run writes a feed entry instead of sending."}
+                                ? `LIVE — new prospects are emailed automatically (${draft.businessHoursEnabled ? `${hourLabel(BUSINESS_START_HOUR)}–${hourLabel(BUSINESS_END_HOUR)} ${settings.timezone}` : "any time"}, up to ${draft.dailyCap}/day).`
+                                : isDryRunOnly
+                                  ? "Auto-send is on but DRY RUN is still on, so nothing is actually sent — each candidate only gets a feed entry. Switch Dry run off and press Save changes to start sending."
+                                  : "Not sending: auto-send is off. Dry run writes a feed entry instead of sending."}
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+                            <span className="text-xs text-muted-foreground">
+                                Runs automatically every 15 minutes (follow-ups + new audit emails).
+                                {lastRun ? ` ${lastRun}` : " Nothing run by hand yet."}
+                            </span>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => { void runNow(); }}
+                                disabled={isRunningPass}
+                                className="shrink-0"
+                            >
+                                {isRunningPass ? "Running..." : "Run now"}
+                            </Button>
                         </div>
 
                         <div className="flex items-center justify-between gap-3">

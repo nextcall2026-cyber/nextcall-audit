@@ -21,6 +21,24 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // 2c. Allow the automation sweep: an external scheduler (cron-job.org,
+  // UptimeRobot) cannot send a cookie, so it authenticates with the shared
+  // CRON_SECRET inside the route instead. The dashboard button sends the
+  // normal cookie and is still checked below.
+  if (pathname === '/api/automation/sweep') {
+    const cronSecret = process.env.CRON_SECRET;
+    const provided =
+      request.headers.get('x-cron-secret') ??
+      request.nextUrl.searchParams.get('secret');
+    const cookie = request.cookies.get('nextcall_auth')?.value;
+    const appPassword = process.env.APP_PASSWORD;
+
+    if ((cronSecret && provided === cronSecret) || (appPassword && cookie === appPassword)) {
+      return NextResponse.next();
+    }
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   // 3. Protect Dashboard and all other APIs
   if (pathname.startsWith('/dashboard') || pathname.startsWith('/api')) {
     const authToken = request.cookies.get('nextcall_auth')?.value;

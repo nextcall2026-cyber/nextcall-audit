@@ -27,6 +27,7 @@ function business(overrides: Partial<Business> = {}): Business {
     id: "biz-1",
     name: "Carolina Landscaping and Clean Up",
     providerIds: {},
+    sources: [],
     ...overrides,
   };
 }
