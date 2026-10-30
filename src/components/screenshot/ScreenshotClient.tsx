@@ -69,7 +69,6 @@ export default function ScreenshotClient() {
   const [creating, setCreating] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [addingToPipeline, setAddingToPipeline] = useState(false);
-  const [inPipeline, setInPipeline] = useState(false);
   const [fields, setFields] = useState<ExtractedFields>(EMPTY_FIELDS);
   const [missing, setMissing] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
@@ -77,6 +76,8 @@ export default function ScreenshotClient() {
   const [result, setResult] = useState<{
     businessId: string;
     businessName: string;
+    /** Set when the server already put this audit into the pipeline. */
+    prospectId: string | null;
     audit: AuditResult;
     aiReport: AuditReport | null;
   } | null>(null);
@@ -96,7 +97,6 @@ export default function ScreenshotClient() {
     setResult(null);
     setFields(EMPTY_FIELDS);
     setMissing([]);
-    setInPipeline(false);
     setNotes("");
     setDuplicate(null);
     setSelectedFile(file);
@@ -208,12 +208,15 @@ export default function ScreenshotClient() {
       setDuplicate(null);
       if (data.warning) {
         toast.warning("AI report failed", data.warning);
+      } else if (data.pipelineWarning) {
+        toast.warning("Created, but not in the pipeline", data.pipelineWarning);
       } else {
-        toast.success("Business created & audited");
+        toast.success("Business created, audited & added to pipeline");
       }
       setResult({
         businessId: data.businessId,
         businessName: data.business.name,
+        prospectId: data.prospectId ?? null,
         audit: data.audit,
         aiReport: data.aiReport,
       });
@@ -289,6 +292,8 @@ export default function ScreenshotClient() {
     }
   };
 
+  // Fallback only: the server adds the prospect as part of "Create business &
+  // run audit". This stays for the rare case where that step failed.
   const handleAddToPipeline = async () => {
     if (!result) return;
     setAddingToPipeline(true);
@@ -303,7 +308,9 @@ export default function ScreenshotClient() {
         const errData = await response.json().catch(() => ({ error: "Failed to add to pipeline" }));
         throw new Error(errData.error || "Failed to add to pipeline");
       }
-      setInPipeline(true);
+      const data = await response.json().catch(() => ({}));
+      const prospectId: string | null = data?.prospect?.id ?? null;
+      setResult((prev) => (prev ? { ...prev, prospectId } : prev));
       toast.success("Added to pipeline");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -506,7 +513,8 @@ export default function ScreenshotClient() {
                 )}
               </Button>
               <span className="text-xs text-muted-foreground">
-                Runs enrichment (website crawl if provided) + deterministic audit + AI report.
+                Runs enrichment (website crawl if provided) + deterministic audit + AI report, then
+                adds the audited business straight to the pipeline.
               </span>
             </div>
           </CardContent>
@@ -575,16 +583,29 @@ export default function ScreenshotClient() {
                 <Download className="h-3.5 w-3.5 mr-1.5" />
                 {downloadingPdf ? "Generating..." : "Download PDF"}
               </Button>
-              <Button
-                size="sm"
-                variant={inPipeline ? "ghost" : "outline"}
-                onClick={handleAddToPipeline}
-                disabled={addingToPipeline || inPipeline}
-                className={inPipeline ? "text-green-600" : "border-green-500 text-green-600 hover:bg-green-50"}
-              >
-                {inPipeline ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-                {addingToPipeline ? "Adding..." : inPipeline ? "In Pipeline" : "Add to Pipeline"}
-              </Button>
+              {result.prospectId ? (
+                <Link href={`/dashboard/pipeline/${result.prospectId}`}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="border border-green-300 bg-green-50 text-green-700 hover:bg-green-100"
+                  >
+                    <Check className="h-3.5 w-3.5 mr-1.5" />
+                    In Pipeline — Open
+                  </Button>
+                </Link>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleAddToPipeline}
+                  disabled={addingToPipeline}
+                  className="border-green-500 text-green-600 hover:bg-green-50"
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1.5" />
+                  {addingToPipeline ? "Adding..." : "Add to Pipeline"}
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>

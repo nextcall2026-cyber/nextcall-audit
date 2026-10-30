@@ -13,6 +13,9 @@ import { aiReportService } from "@/services/aiReportService";
 import { priorityService } from "@/services/priorityService";
 import { mergeNotesIntoEnrichment, parseBusinessNotes } from "@/services/notesParser";
 import { applyWebsiteAuditBackfill } from "@/services/websiteAuditBackfill";
+import { pickBestEmailForBusiness } from "@/services/contactEmailPicker";
+import { opportunityService } from "@/services/opportunityService";
+import { notificationService } from "@/services/notificationService";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 
@@ -283,6 +286,53 @@ export async function POST(request: NextRequest) {
     // 4. Recalculate opportunity priority from the fresh audit
     await priorityService.recalculatePriorityForBusiness(id);
 
+    // 5. Straight into the pipeline.
+    // Creating the business from a screenshot already means "I want to work
+    // this lead", so an extra "Add to pipeline" click afterwards is busywork.
+    // Duplicates never reach this point — they are answered with a 409 above,
+    // and the user has to confirm "Create duplicate anyway" first.
+    let prospectId: string | null = null;
+    let pipelineWarning: string | null = null;
+
+    try {
+      const contactEmail = pickBestEmailForBusiness(enrichedBusiness);
+      const opportunityScore = opportunityService.calculateScore(enrichedBusiness);
+      const prospect = await prospectPersistenceService.createProspect(
+        id,
+        contactEmail,
+        opportunityScore,
+        enrichedBusiness
+      );
+
+      if (prospect) {
+        prospectId = prospect.id;
+        // The priority pass above ran before the prospect existed, so score it
+        // now — the pipeline sorts on this.
+        await priorityService.recalculatePriorityForProspect(prospect.id);
+
+        await notificationService.notify({
+          type: "PROSPECT_ADDED",
+          title: `New prospect: ${enrichedBusiness.name}`,
+          body: contactEmail
+            ? `Added to the pipeline · ${contactEmail}`
+            : "Added to the pipeline — no contact email detected yet",
+          href: `/dashboard/pipeline/${prospect.id}`,
+          prospectId: prospect.id,
+          businessId: id,
+          dedupeKey: `prospect-added:${prospect.id}`,
+        });
+      } else {
+        pipelineWarning =
+          "The business and its audit were saved, but it could not be added to the pipeline automatically. Use \"Add to Pipeline\" below.";
+      }
+    } catch (pipelineError) {
+      logger.error(
+        `[API /businesses/manual] Could not add ${id} to the pipeline: ${getErrorMessage(pipelineError)}`
+      );
+      pipelineWarning =
+        "The business and its audit were saved, but it could not be added to the pipeline automatically. Use \"Add to Pipeline\" below.";
+    }
+
     logger.info(`[API /businesses/manual] Created ${d.name} (${id}) from manual input.`);
 
     return NextResponse.json({
@@ -291,6 +341,8 @@ export async function POST(request: NextRequest) {
       audit: auditResult,
       aiReport,
       warning: aiWarning,
+      prospectId,
+      pipelineWarning,
     });
   } catch (error) {
     logger.error("[API /businesses/manual] Manual business creation failed:", getErrorMessage(error));
