@@ -6,6 +6,7 @@ import {
 } from "@/services/automationSettingsService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
 import { automationRunLogService } from "@/services/automationRunLogService";
+import { MAX_SENDS_PER_PASS } from "@/services/autoSendService";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -27,6 +28,7 @@ async function usageFor(settings: { timezone: string; dailyCap: number }) {
     dayStart,
     lastRunAt: runState.lastRunAt,
     lastRunResult: runState.lastResult,
+    perPassLimit: MAX_SENDS_PER_PASS,
   };
 }
 

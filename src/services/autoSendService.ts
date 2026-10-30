@@ -37,6 +37,15 @@ export interface AutoSendReport {
 }
 
 /**
+ * How many initial emails one pass may send.
+ *
+ * On a serverless host a pass has to finish inside one invocation (60s), and
+ * each send renders a PDF — so the queue drains in batches instead of being
+ * cut off half-way through. The next pass continues 15 minutes later.
+ */
+export const MAX_SENDS_PER_PASS = 15;
+
+/**
  * A provider-wide limit ("You have reached your daily email sending quota",
  * a 429, a rate limit) fails every remaining prospect too, so the pass stops
  * instead of burning a PDF render per attempt.
@@ -101,9 +110,15 @@ class AutoSendService {
 
     let sent = 0;
     let providerLimit: string | null = null;
+    let passBudgetReached = false;
 
     for (const prospect of candidates) {
       if (remaining <= 0) break;
+
+      if (sent >= MAX_SENDS_PER_PASS) {
+        passBudgetReached = true;
+        break;
+      }
 
       const business = await persistenceService.getBusinessById(prospect.businessId);
       const name = business?.name || prospect.businessSnapshot?.name || "Unknown business";
@@ -173,7 +188,9 @@ class AutoSendService {
       dryRun: settings.dryRun,
       candidates: candidates.length,
       sent,
-      skipped: "",
+      skipped: passBudgetReached
+        ? `${MAX_SENDS_PER_PASS} per pass — ${Math.max(0, candidates.length - sent)} still queued for the next pass`
+        : "",
     };
   }
 }

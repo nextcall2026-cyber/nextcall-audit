@@ -36,6 +36,7 @@ interface AutomationUsage {
     timezone: string;
     lastRunAt?: string | null;
     lastRunResult?: string | null;
+    perPassLimit?: number;
 }
 
 interface SettingsPayload {
@@ -353,6 +354,7 @@ export default function AutoSendSettingsCard() {
                         <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
                             <span className="text-xs text-muted-foreground">
                                 Sends by itself every 15 minutes — nothing to press.
+                                {usage?.perPassLimit ? ` Up to ${usage.perPassLimit} emails per round, the rest follow on the next one.` : ""}
                                 {usage?.lastRunAt
                                     ? ` Last automatic check ${timeAgo(usage.lastRunAt)}${usage.lastRunResult ? ` (${usage.lastRunResult})` : ""}.`
                                     : " Waiting for the first automatic check."}
