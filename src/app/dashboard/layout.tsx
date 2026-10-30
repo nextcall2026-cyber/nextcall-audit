@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/dashboard/LogoutButton";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { ToastProvider } from "@/components/ui/toast";
+import { AutomationHeartbeat } from "@/components/dashboard/AutomationHeartbeat";
 import { cn } from "@/lib/utils";
 import { LayoutDashboard, Compass, Kanban, Settings, Camera, Menu, PanelLeft, Bell } from "lucide-react";
 
@@ -108,6 +109,7 @@ export default function DashboardLayout({
 
     return (
         <ToastProvider>
+        <AutomationHeartbeat />
         <div className="flex min-h-screen w-full flex-col bg-muted/40">
             {/* Desktop sidebar (sm and up) — collapsible */}
             {!isSidebarCollapsed && (

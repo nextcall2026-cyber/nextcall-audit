@@ -1,13 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { automationSettingsService } from "@/services/automationSettingsService";
+import {
+  automationSettingsService,
+  startOfDayIso,
+} from "@/services/automationSettingsService";
+import { outreachPersistenceService } from "@/services/outreachPersistenceService";
+import { automationRunLogService } from "@/services/automationRunLogService";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
+
+/**
+ * How much of today's allowance has been used. Counted from real SENT outreach
+ * records (initial emails + follow-ups), from local midnight in the configured
+ * timezone — the same window the send cap uses.
+ */
+async function usageFor(settings: { timezone: string; dailyCap: number }) {
+  const dayStart = startOfDayIso(settings.timezone);
+  const counts = await outreachPersistenceService.countSentSinceByStage(dayStart);
+  const runState = await automationRunLogService.getState();
+  return {
+    sentToday: counts.total,
+    initialEmails: counts.initial,
+    followUps: counts.followUps,
+    dailyCap: settings.dailyCap,
+    timezone: settings.timezone,
+    dayStart,
+    lastRunAt: runState.lastRunAt,
+    lastRunResult: runState.lastResult,
+  };
+}
 
 export async function GET() {
   try {
     const settings = await automationSettingsService.getSettings();
-    return NextResponse.json({ settings });
+    const usage = await usageFor(settings);
+    return NextResponse.json({ settings, usage });
   } catch (error) {
     logger.error("[API /automation/settings] Fetch failed:", getErrorMessage(error));
     return NextResponse.json(
@@ -39,7 +66,8 @@ export async function PATCH(request: NextRequest) {
     }
 
     const settings = await automationSettingsService.updateSettings(parsed.data);
-    return NextResponse.json({ settings });
+    const usage = await usageFor(settings);
+    return NextResponse.json({ settings, usage });
   } catch (error) {
     logger.error("[API /automation/settings] Update failed:", getErrorMessage(error));
     return NextResponse.json(

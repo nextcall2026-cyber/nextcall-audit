@@ -27,6 +27,22 @@ type EditableKey =
     | "startHour"
     | "endHour";
 
+/** How much of today's allowance has been used (server-counted). */
+interface AutomationUsage {
+    sentToday: number;
+    initialEmails: number;
+    followUps: number;
+    dailyCap: number;
+    timezone: string;
+    lastRunAt?: string | null;
+    lastRunResult?: string | null;
+}
+
+interface SettingsPayload {
+    settings: AutomationSettingsShape;
+    usage?: AutomationUsage | null;
+}
+
 type Draft = Pick<AutomationSettingsShape, EditableKey>;
 
 const EDITABLE_KEYS: EditableKey[] = [
@@ -45,6 +61,18 @@ const BUSINESS_START_HOUR = 9;
 const BUSINESS_END_HOUR = 18;
 
 const hourLabel = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
+
+/** "12 minutes ago" for the last automatic pass. */
+function timeAgo(iso: string): string {
+    const then = new Date(iso).getTime();
+    if (!Number.isFinite(then)) return "unknown";
+    const minutes = Math.round((Date.now() - then) / 60000);
+    if (minutes < 1) return "just now";
+    if (minutes === 1) return "1 minute ago";
+    if (minutes < 60) return `${minutes} minutes ago`;
+    const hours = Math.round(minutes / 60);
+    return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
+}
 
 function toDraft(settings: AutomationSettingsShape): Draft {
     return {
@@ -124,23 +152,23 @@ export default function AutoSendSettingsCard() {
     const [isSaving, setIsSaving] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
-    const [isRunningPass, setIsRunningPass] = useState(false);
-    const [lastRun, setLastRun] = useState<string | null>(null);
+    const [usage, setUsage] = useState<AutomationUsage | null>(null);
 
     // Pure fetches (no setState) so the mount effect below can call them
     // without tripping react-hooks/set-state-in-effect.
-    const fetchSettings = useCallback(async (): Promise<AutomationSettingsShape> => {
+    const fetchSettings = useCallback(async (): Promise<SettingsPayload> => {
         const res = await fetch("/api/automation/settings", { cache: "no-store" });
         if (!res.ok) throw new Error(`Request failed (${res.status})`);
-        const data = (await res.json()) as { settings: AutomationSettingsShape };
-        return data.settings;
+        const data = (await res.json()) as SettingsPayload;
+        return data;
     }, []);
 
     const load = useCallback(async () => {
         try {
             const loaded = await fetchSettings();
-            setSettings(loaded);
-            setDraft(readDraft() ?? toDraft(loaded));
+            setSettings(loaded.settings);
+            setUsage(loaded.usage ?? null);
+            setDraft(readDraft() ?? toDraft(loaded.settings));
             setLoadError(null);
         } catch (err) {
             const message = getErrorMessage(err);
@@ -160,8 +188,9 @@ export default function AutoSendSettingsCard() {
             try {
                 const loaded = await fetchSettings();
                 if (cancelled) return;
-                setSettings(loaded);
-                setDraft(readDraft() ?? toDraft(loaded));
+                setSettings(loaded.settings);
+                setUsage(loaded.usage ?? null);
+                setDraft(readDraft() ?? toDraft(loaded.settings));
                 setLoadError(null);
             } catch (err) {
                 if (cancelled) return;
@@ -213,7 +242,7 @@ export default function AutoSendSettingsCard() {
             });
 
             const data = (await res.json().catch(() => null)) as
-                | { settings?: AutomationSettingsShape; error?: string; details?: unknown }
+                | { settings?: AutomationSettingsShape; usage?: AutomationUsage | null; error?: string; details?: unknown }
                 | null;
 
             if (!res.ok || !data?.settings) {
@@ -228,6 +257,7 @@ export default function AutoSendSettingsCard() {
             }
 
             setSettings(data.settings);
+            setUsage(data.usage ?? null);
             setDraft(toDraft(data.settings));
             writeDraft(null);
             toast.success("Saved", "These settings are stored and apply to the next send.");
@@ -238,50 +268,6 @@ export default function AutoSendSettingsCard() {
             toast.error("Could not save", message);
         } finally {
             setIsSaving(false);
-        }
-    };
-
-    const runNow = async () => {
-        if (isRunningPass) return;
-        setIsRunningPass(true);
-        setSaveError(null);
-        try {
-            const res = await fetch("/api/automation/sweep", { method: "POST" });
-            const data = (await res.json().catch(() => null)) as
-                | {
-                      autoSend?: { sent: number; candidates: number; skipped: string; dryRun: boolean } | null;
-                      error?: string;
-                      reason?: string;
-                  }
-                | null;
-
-            if (!res.ok) {
-                throw new Error(data?.reason || data?.error || `Request failed (${res.status})`);
-            }
-
-            const pass = data?.autoSend;
-            if (!pass) throw new Error("The pass returned no auto-send result.");
-
-            if (pass.dryRun) {
-                const message = `${pass.candidates} prospect(s) would get an email. Test mode is ON, so nothing was sent.`;
-                setLastRun(`Test mode — ${message}`);
-                toast.info("TEST MODE: nothing was sent", message);
-            } else if (pass.sent > 0) {
-                const message = `${pass.sent} email(s) sent (out of ${pass.candidates} prospect(s) waiting).`;
-                setLastRun(`Just now — ${message}`);
-                toast.success("Audit emails sent", message);
-            } else {
-                const message = pass.skipped || "No prospect was waiting for an email.";
-                setLastRun(`Just now — ${message}`);
-                toast.info("Nothing to send right now", message);
-            }
-        } catch (err) {
-            const message = getErrorMessage(err);
-            logger.error("[AutoSendSettings] Manual pass failed:", message);
-            setSaveError(message);
-            toast.error("Sending failed", message);
-        } finally {
-            setIsRunningPass(false);
         }
     };
 
@@ -350,20 +336,27 @@ export default function AutoSendSettingsCard() {
                                   : "OFF — no email is sent by itself. Nothing happens until you switch Auto-send on."}
                         </div>
 
+                        <div className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+                            <div className="flex flex-col">
+                                <span className="text-sm font-medium">
+                                    Emails sent today: {usage ? usage.sentToday : "—"}
+                                    {usage ? <span className="text-xs font-normal text-muted-foreground"> of {usage.dailyCap} max</span> : null}
+                                </span>
+                                <span className="text-xs text-muted-foreground">
+                                    {usage
+                                        ? `${usage.initialEmails} first email(s) + ${usage.followUps} follow-up(s) since midnight (${usage.timezone}). The count resets at midnight.`
+                                        : "Counted from real sent emails; the count resets at local midnight."}
+                                </span>
+                            </div>
+                        </div>
+
                         <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
                             <span className="text-xs text-muted-foreground">
-                                Sends by itself every 15 minutes (follow-ups + new audit emails).
-                                {lastRun ? ` ${lastRun}` : " Not run by hand yet."}
+                                Sends by itself every 15 minutes — nothing to press.
+                                {usage?.lastRunAt
+                                    ? ` Last automatic check ${timeAgo(usage.lastRunAt)}${usage.lastRunResult ? ` (${usage.lastRunResult})` : ""}.`
+                                    : " Waiting for the first automatic check."}
                             </span>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => { void runNow(); }}
-                                disabled={isRunningPass}
-                                className="shrink-0"
-                            >
-                                {isRunningPass ? "Sending..." : "Send now"}
-                            </Button>
                         </div>
 
                         <div className="flex items-center justify-between gap-3">

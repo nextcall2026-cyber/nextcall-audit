@@ -315,6 +315,30 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
   }
 
   /**
+   * Sends since `sinceIso`, split into initial audit emails and follow-ups.
+   * The daily cap counts both, so the dashboard shows both.
+   */
+  async countSentSinceByStage(
+    sinceIso: string
+  ): Promise<{ total: number; initial: number; followUps: number }> {
+    try {
+      const collection = await getOutreachCollection();
+      const cursor = collection.find({ status: "SENT" });
+      const docs = (await cursor.toArray()) as unknown as OutreachRecord[];
+      const today = docs.filter((d) => d.sentAt && d.sentAt >= sinceIso);
+      // OutreachStage is numeric: 0 = initial audit email, 1+ = follow-ups.
+      const initial = today.filter((d) => d.sequenceStage === 0).length;
+      return { total: today.length, initial, followUps: today.length - initial };
+    } catch (error) {
+      logger.error(
+        "[OutreachPersistenceService] Failed to count sends by stage:",
+        getErrorMessage(error)
+      );
+      return { total: 0, initial: 0, followUps: 0 };
+    }
+  }
+
+  /**
    * Fetches all outreach records that were sent AND opened.
    * Used by the follow-up automation sweep. An open already implies delivery,
    * so this works even without the delivery webhook configured.

@@ -21,11 +21,14 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // 2c. Allow the automation sweep: an external scheduler (cron-job.org,
-  // UptimeRobot) cannot send a cookie, so it authenticates with the shared
-  // CRON_SECRET inside the route instead. The dashboard button sends the
-  // normal cookie and is still checked below.
-  if (pathname === '/api/automation/sweep') {
+  // 2c. Allow the automation endpoints: an external scheduler (cron-job.org,
+  // UptimeRobot, Vercel Cron) cannot send a cookie, so it authenticates with
+  // the shared CRON_SECRET inside the route instead. The dashboard heartbeat
+  // and buttons send the normal cookie and are still checked below.
+  if (
+    pathname === '/api/automation/sweep' ||
+    pathname === '/api/automation/tick'
+  ) {
     const cronSecret = process.env.CRON_SECRET;
     const provided =
       request.headers.get('x-cron-secret') ??
