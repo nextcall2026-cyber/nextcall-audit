@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   automationSettingsService,
   startOfDayIso,
+  MAX_DAILY_CAP,
 } from "@/services/automationSettingsService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
 import { automationRunLogService } from "@/services/automationRunLogService";
@@ -49,7 +50,10 @@ export async function GET() {
 const AutomationSettingsSchema = z.object({
   autoSendEnabled: z.boolean().optional(),
   dryRun: z.boolean().optional(),
-  dailyCap: z.number().int().min(0).max(100).optional(),
+  // The ceiling is the providers' combined daily capacity (Brevo 300 +
+  // Resend 50). It used to be hard-coded to 100 here, which silently rejected
+  // the 350 the send layer can now actually deliver.
+  dailyCap: z.number().int().min(0).max(MAX_DAILY_CAP).optional(),
   businessHoursEnabled: z.boolean().optional(),
   startHour: z.number().int().min(0).max(23).optional(),
   endHour: z.number().int().min(0).max(23).optional(),

@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
 import { CheckCircle2, XCircle, Info, Shield, Mail, Brain, Search, Gauge } from "lucide-react";
+import AutoSendSettingsCard from "@/components/notifications/AutoSendSettingsCard";
 import { emailQuotaService } from "@/services/emailQuotaService";
 import { EMAIL_PROVIDER_LABELS, ProviderCapacity, totalRemaining } from "@/lib/emailRouting";
 
@@ -49,6 +50,18 @@ export default async function SettingsPage() {
                 <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
                 <p className="text-sm text-muted-foreground mt-1">View application configuration and service status.</p>
             </div>
+
+            {/* Outreach automation lives here rather than under Notifications:
+                it is a sending rule, not an alert. */}
+            <section className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1">
+                    <h2 className="text-base font-semibold text-foreground">Outreach automation</h2>
+                    <p className="text-sm text-muted-foreground">
+                        Whether the app emails new audits by itself, how many a day, and when.
+                    </p>
+                </div>
+                <AutoSendSettingsCard />
+            </section>
 
             <div className="grid gap-6 md:grid-cols-2">
                 <Card>

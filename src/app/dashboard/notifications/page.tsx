@@ -1,6 +1,5 @@
 import NotificationsClient from "@/components/notifications/NotificationsClient";
 import NotificationSettingsCard from "@/components/notifications/NotificationSettingsCard";
-import AutoSendSettingsCard from "@/components/notifications/AutoSendSettingsCard";
 
 export default function NotificationsPage() {
     return (
@@ -15,10 +14,7 @@ export default function NotificationsPage() {
 
             <NotificationsClient />
 
-            <div className="grid gap-6 lg:grid-cols-2">
-                <AutoSendSettingsCard />
-                <NotificationSettingsCard />
-            </div>
+            <NotificationSettingsCard />
         </div>
     );
 }
