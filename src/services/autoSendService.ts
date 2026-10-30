@@ -6,9 +6,6 @@ import { outreachPersistenceService } from "@/services/outreachPersistenceServic
 import { notificationService } from "@/services/notificationService";
 import { outreachSendService } from "@/services/outreachSendService";
 import { pickBestEmailForBusiness } from "@/services/contactEmailPicker";
-import { aiReportService } from "@/services/aiReportService";
-import { auditPersistenceService } from "@/services/auditPersistenceService";
-import { Business } from "@/types";
 import {
   automationSettingsService,
   currentHourInTimezone,
@@ -16,7 +13,6 @@ import {
   startOfDayIso,
 } from "@/services/automationSettingsService";
 import { logger } from "@/lib/logger";
-import { getErrorMessage } from "@/lib/errors";
 
 /**
  * Auto-send pass: emails the initial audit to brand-new prospects that are
@@ -29,7 +25,8 @@ import { getErrorMessage } from "@/lib/errors";
  *   - hard daily cap (counted from real SENT records, not attempts)
  *   - only NEW / UNCONTACTED prospects with a contact email and no suppression
  *   - the actual send reuses outreachSendService, so every safety rail
- *     (one-business-one-email, atomic state claim, idempotency key) applies.
+ *     (one-business-one-email, atomic state claim, idempotency key) applies —
+ *     and the audit is completed there before the email leaves.
  */
 
 export interface AutoSendReport {
@@ -50,10 +47,17 @@ export interface AutoSendReport {
 export const MAX_SENDS_PER_PASS = 15;
 
 /**
- * Reports generated inside one pass. Each is an LLM call, so the pass stays
+ * AI reports generated inside one pass. Each is an LLM call, so the pass stays
  * inside its time budget and the rest are picked up 15 minutes later.
  */
 export const MAX_REPORTS_PER_PASS = 3;
+
+/**
+ * Consecutive AI failures that mean the model itself is down rather than one
+ * awkward business: stop the pass instead of spending a slow AI call per
+ * remaining prospect only to fail the same way.
+ */
+export const MAX_AI_FAILURES_PER_PASS = 2;
 
 /**
  * A provider-wide limit ("You have reached your daily email sending quota",
@@ -126,6 +130,8 @@ class AutoSendService {
 
     let sent = 0;
     let providerLimit: string | null = null;
+    let aiFailure: string | null = null;
+    let aiFailures = 0;
     let passBudgetReached = false;
     let reportsGenerated = 0;
 
@@ -160,25 +166,15 @@ class AutoSendService {
         continue;
       }
 
-      const result = await outreachSendService.sendInitialOutreach(prospect.id);
-      let outcome = result;
-
-      // A prospect whose deterministic audit exists but whose AI report does
-      // not (the report failed when it was created) would sit in the queue
-      // forever. Build it here and send in the same pass.
-      if (
-        !outcome.ok &&
-        /no ai audit report/i.test(outcome.error) &&
-        business &&
-        reportsGenerated < MAX_REPORTS_PER_PASS
-      ) {
-        reportsGenerated += 1;
-        if (await this.generateMissingReport(business, prospect.businessId)) {
-          outcome = await outreachSendService.sendInitialOutreach(prospect.id);
-        }
-      }
+      const outcome = await outreachSendService.sendInitialOutreach(prospect.id, {
+        // Generating a missing AI report is an LLM call, so it is budgeted per
+        // pass. Once the budget is spent the prospect is skipped with an
+        // AI_BUDGET code and picked up by the next pass 15 minutes later.
+        allowAiReport: reportsGenerated < MAX_REPORTS_PER_PASS,
+      });
 
       if (outcome.ok) {
+        if (outcome.generatedReport) reportsGenerated += 1;
         sent += 1;
         remaining -= 1;
 
@@ -189,6 +185,19 @@ class AutoSendService {
       } else {
         logger.warn(`[AutoSendService] Skipped ${prospect.id}: ${outcome.error}`);
 
+        if (outcome.code === "AI_BUDGET") continue;
+
+        // The model itself is failing — every remaining candidate would spend
+        // another slow AI call to fail the same way. Stop the pass.
+        if (outcome.code === "AI_FAILED") {
+          aiFailures += 1;
+          if (aiFailures >= MAX_AI_FAILURES_PER_PASS) {
+            aiFailure = outcome.error;
+            break;
+          }
+          continue;
+        }
+
         // A provider-wide limit (both Brevo and Resend out of daily quota, or
         // a rate limit) will fail every remaining prospect too, and each
         // attempt costs a PDF render and a FAILED record. Stop the pass and
@@ -198,6 +207,24 @@ class AutoSendService {
           break;
         }
       }
+    }
+
+    if (aiFailure) {
+      logger.warn(`[AutoSendService] Pass stopped early: ${aiFailure}`);
+      await notificationService.notify({
+        type: "AI_PROVIDER_ISSUE",
+        title: "AI report generation is failing — sending paused",
+        body: `${aiFailure.slice(0, 200)} ${Math.max(0, candidates.length - sent)} prospect(s) stay queued; the audit report is rebuilt on a later pass before anything is emailed.`,
+        dedupeKey: "auto-send-ai-failure",
+      });
+
+      return {
+        ran: true,
+        dryRun: false,
+        candidates: candidates.length,
+        sent,
+        skipped: `AI report generation failed ${aiFailures} time(s) after ${sent} send(s) — the rest stay queued`,
+      };
     }
 
     if (providerLimit) {
@@ -231,29 +258,6 @@ class AutoSendService {
         ? `${MAX_SENDS_PER_PASS} per pass — ${Math.max(0, candidates.length - sent)} still queued for the next pass`
         : "",
     };
-  }
-  /**
-   * Builds the AI report a queued prospect is missing, so the send can go out
-   * in the same pass without anyone opening the pipeline by hand.
-   */
-  private async generateMissingReport(
-    business: Business,
-    businessId: string
-  ): Promise<boolean> {
-    try {
-      const storedAudit = await auditPersistenceService.getLatestAudit(businessId);
-      if (!storedAudit) return false;
-
-      const report = await aiReportService.generateAuditReport(business, storedAudit.audit);
-      await auditPersistenceService.saveAIReport(storedAudit.id, report);
-      logger.info(`[AutoSendService] Generated the missing AI report for ${businessId}.`);
-      return true;
-    } catch (error) {
-      logger.warn(
-        `[AutoSendService] Could not generate the AI report for ${businessId}: ${getErrorMessage(error)}`
-      );
-      return false;
-    }
   }
 }
 

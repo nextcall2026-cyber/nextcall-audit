@@ -1,7 +1,7 @@
 import "server-only";
 
 import { prospectPersistenceService } from "@/services/prospectPersistenceService";
-import { auditPersistenceService } from "@/services/auditPersistenceService";
+import { auditReadinessService } from "@/services/auditReadinessService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
 import { persistenceService } from "@/services/persistenceService";
 import { emailService } from "@/services/emailService";
@@ -27,11 +27,28 @@ import { pickBestEmailForBusiness } from "@/services/contactEmailPicker";
  */
 
 export type SendInitialOutcome =
-  | { ok: true }
-  | { ok: false; status: number; error: string };
+  | { ok: true; createdAudit: boolean; generatedReport: boolean }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      /** Set when the audit/AI step (not the email step) is what blocked the send. */
+      code?: "BUSINESS_MISSING" | "AUDIT_FAILED" | "AI_FAILED" | "AI_BUDGET";
+    };
+
+export interface SendInitialOptions {
+  /**
+   * Whether a missing AI report may be generated as part of this send. The
+   * auto-send pass turns this off once its per-run AI budget is spent.
+   */
+  allowAiReport?: boolean;
+}
 
 class OutreachSendService {
-  async sendInitialOutreach(prospectId: string): Promise<SendInitialOutcome> {
+  async sendInitialOutreach(
+    prospectId: string,
+    options: SendInitialOptions = {}
+  ): Promise<SendInitialOutcome> {
     // 1. Fetch Prospect
     let prospect = await prospectPersistenceService.getProspectById(prospectId);
     if (!prospect) {
@@ -81,14 +98,23 @@ class OutreachSendService {
       return { ok: false, status: 409, error: getErrorMessage(e) };
     }
 
-    // 3. Fetch Audit/AI Report to include in email
-    const storedAudit = await auditPersistenceService.getLatestAudit(prospect.businessId);
-    if (!storedAudit || !storedAudit.aiReport) {
-      return {
-        ok: false,
-        status: 400,
-        error: "No AI audit report found. Please generate the audit first.",
-      };
+    // 3. Make sure the audit is actually finished before anything is sent.
+    //    A prospect whose audit never completed used to be stuck here with
+    //    "No AI audit report found"; now the deterministic audit and the AI
+    //    report are generated on the spot, cheapest step first.
+    const readiness = await auditReadinessService.ensureReady(prospect.businessId, {
+      allowAiReport: options.allowAiReport ?? true,
+    });
+
+    if (!readiness.ok) {
+      const status = readiness.code === "AI_BUDGET" ? 409 : 400;
+      return { ok: false, status, error: readiness.error, code: readiness.code };
+    }
+
+    const storedAudit = readiness.stored;
+    if (!storedAudit.aiReport) {
+      // ensureReady only returns ok with a report; this is belt-and-braces.
+      return { ok: false, status: 400, error: "The audit report is still missing." };
     }
 
     // 4. Fetch Business
@@ -201,7 +227,11 @@ class OutreachSendService {
       // Recalculate priority because outreach state changed
       await priorityService.recalculatePriorityForProspect(prospectId);
 
-      return { ok: true };
+      return {
+        ok: true,
+        createdAudit: readiness.createdAudit,
+        generatedReport: readiness.generatedReport,
+      };
     }
 
     // Send failed, REVERT the atomic claim so the user can try again
