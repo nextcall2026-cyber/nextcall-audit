@@ -3,7 +3,9 @@ import { env } from "@/lib/env";
 import { CheckCircle2, XCircle, Info, Shield, Mail, Brain, Search, Gauge } from "lucide-react";
 import AutoSendSettingsCard from "@/components/notifications/AutoSendSettingsCard";
 import { emailQuotaService } from "@/services/emailQuotaService";
+import { dbUsageService } from "@/services/dbUsageService";
 import { EMAIL_PROVIDER_LABELS, ProviderCapacity, totalRemaining } from "@/lib/emailRouting";
+import { formatBytes, formatCount } from "@/lib/formatBytes";
 
 // Today's send counts come from the database, so this page must not be
 // pre-rendered at build time.
@@ -43,6 +45,9 @@ export default async function SettingsPage() {
     const capacity: ProviderCapacity[] | null = await emailQuotaService
         .getCapacities()
         .catch(() => null);
+
+    // Storage estimate: document counts plus a sample of each collection.
+    const dbUsage = await dbUsageService.getUsage().catch(() => null);
 
     return (
         <div className="flex flex-col gap-6">
@@ -215,6 +220,45 @@ export default async function SettingsPage() {
                             configured={hasAstra}
                             description="Stores prospects, audits, and outreach records"
                         />
+
+                        {dbUsage && (
+                            <div className="mt-3 space-y-3 border-t border-border pt-3">
+                                <div className="flex items-baseline justify-between">
+                                    <span className="text-sm text-muted-foreground">Storage used</span>
+                                    <span className="text-lg font-bold text-foreground">
+                                        {formatBytes(dbUsage.estimatedBytes)}
+                                    </span>
+                                </div>
+
+                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                                    <div
+                                        className="h-full rounded-full bg-primary"
+                                        style={{ width: `${dbUsage.percentUsed === 0 ? 0 : Math.max(2, dbUsage.percentUsed)}%` }}
+                                    />
+                                </div>
+
+                                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                    <span>{dbUsage.percentUsed}% of {formatBytes(dbUsage.limitBytes)}</span>
+                                    <span>{formatCount(dbUsage.totalDocuments)} documents</span>
+                                </div>
+
+                                <div className="space-y-1">
+                                    {dbUsage.collections.map((collection) => (
+                                        <div key={collection.name} className="flex items-center justify-between text-xs">
+                                            <span className="font-medium text-foreground">{collection.name}</span>
+                                            <span className="text-muted-foreground">
+                                                {formatCount(collection.documents)} docs · {formatBytes(collection.estimatedBytes)}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <p className="text-xs text-muted-foreground">
+                                    Estimated from document counts and an average document size — biggest collection first.
+                                    Audits and outreach bodies grow fastest, so prune those to bring the number down.
+                                </p>
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
             </div>

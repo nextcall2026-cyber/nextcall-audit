@@ -5,6 +5,8 @@ const envSchema = z.object({
   // Database (Astra DB)
   ASTRA_DB_APPLICATION_TOKEN: z.string().optional(),
   ASTRA_DB_API_ENDPOINT: z.string().optional(),
+  /** Plan storage allowance, used for the usage bar on the settings page. */
+  ASTRA_STORAGE_LIMIT_MB: z.coerce.number().positive().optional().default(25600),
 
   // AI Providers — primary: Google Gemini, automatic fallback: OpenAI
   GEMINI_API_KEY: z.string().optional(),
