@@ -1,5 +1,5 @@
 import "server-only";
-import { OutreachRecord, OutreachStatus, OutreachStage, CTAType } from "@/types";
+import { OutreachRecord, OutreachStatus, OutreachStage, CTAType, EmailProviderName } from "@/types";
 import { getOutreachCollection } from "@/lib/db";
 import { prospectPersistenceService } from "@/services/prospectPersistenceService";
 import { logger } from "@/lib/logger";
@@ -105,7 +105,11 @@ async createPendingOutreach(
    * UPDATED: Updates an outreach record to SENT.
    * Outreach state transition is now handled atomically by the API route prior to sending.
    */
-async markAsSent(id: string, resendMessageId: string): Promise<void> {
+async markAsSent(
+    id: string,
+    resendMessageId: string,
+    provider: EmailProviderName = "resend"
+  ): Promise<void> {
     try {
       const collection = await getOutreachCollection();
       const sentAt = new Date().toISOString();
@@ -115,13 +119,18 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
         { 
           $set: { 
             status: 'SENT' as OutreachStatus, 
-            resendMessageId, 
+            // Kept under its original name so the existing webhook lookup and
+            // every historical record keep working; providerMessageId is the
+            // provider-neutral name new code reads.
+            resendMessageId,
+            providerMessageId: resendMessageId,
+            provider,
             sentAt,
             deliveryStatus: 'ACCEPTED' // Assume accepted by provider
           } 
         }
       );
-      logger.info(`[OutreachPersistenceService] Marked outreach ${id} as SENT.`);
+      logger.info(`[OutreachPersistenceService] Marked outreach ${id} as SENT via ${provider}.`);
 
       const record = await collection.findOne({ id });
       if (record) {
@@ -227,6 +236,25 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
   }
 
   /**
+   * Finds an outreach record by the provider's message id (Resend id or Brevo
+   * messageId). Used by the Brevo webhook, which needs the record behind an
+   * unsubscribe event without changing its delivery status.
+   */
+  async findByMessageId(messageId: string): Promise<OutreachRecord | null> {
+    try {
+      const collection = await getOutreachCollection();
+      const doc = await collection.findOne({ resendMessageId: messageId });
+      return (doc as unknown as OutreachRecord) ?? null;
+    } catch (error) {
+      logger.error(
+        `[OutreachPersistenceService] Failed to find record for message ${messageId}:`,
+        getErrorMessage(error)
+      );
+      return null;
+    }
+  }
+
+  /**
    * NEW: Updates the delivery status of an outreach record based on webhook events.
    * Also returns the prospectId so the caller can suppress the prospect if needed.
    */
@@ -315,10 +343,43 @@ async markAsSent(id: string, resendMessageId: string): Promise<void> {
   }
 
   /**
+   * Sends since `sinceIso` per provider.
+   *
+   * This is the day's spend for the Brevo-first routing: Brevo is offered
+   * while it has room, Resend only takes the overflow. Records written before
+   * the two-provider switch have no `provider` field — they were all sent
+   * through Resend, so they are counted there.
+   */
+  async countSentSinceByProvider(
+    sinceIso: string
+  ): Promise<Record<EmailProviderName, number>> {
+    const counts: Record<EmailProviderName, number> = { brevo: 0, resend: 0 };
+
+    try {
+      const collection = await getOutreachCollection();
+      const cursor = collection.find({ status: "SENT" });
+      const docs = (await cursor.toArray()) as unknown as OutreachRecord[];
+
+      for (const doc of docs) {
+        if (!doc.sentAt || doc.sentAt < sinceIso) continue;
+        const provider: EmailProviderName = doc.provider === "brevo" ? "brevo" : "resend";
+        counts[provider] += 1;
+      }
+
+      return counts;
+    } catch (error) {
+      logger.error(
+        "[OutreachPersistenceService] Failed to count sends per provider:",
+        getErrorMessage(error)
+      );
+      return counts;
+    }
+  }
+
+  /**
    * Sends since `sinceIso`, split into initial audit emails and follow-ups.
    * The daily cap counts both, so the dashboard shows both.
-   */
-  async countSentSinceByStage(
+   */  async countSentSinceByStage(
     sinceIso: string
   ): Promise<{ total: number; initial: number; followUps: number }> {
     try {

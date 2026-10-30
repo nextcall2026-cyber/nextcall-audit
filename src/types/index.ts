@@ -354,6 +354,15 @@ export interface Prospect {
   viewAddedAt?: string | null; // When the prospect detail was first viewed
   viewedAt?: string | null; // Last viewed at
   viewedCount?: number; // Number of times viewed
+  /**
+   * True when the pipeline row was marked read by the automation itself —
+   * the AI already wrote and sent the audit email, so there is nothing left
+   * for the operator to review. Distinguishes "read by you" from
+   * "read because the robot handled it".
+   */
+  readByAutomation?: boolean;
+  /** When the automation last sent an email for this prospect. */
+  autoSentAt?: string | null;
   opportunityScore?: OpportunityScore | null; // Lead Opportunity Score at add time
   
   contactEmail: string | null; 
@@ -370,6 +379,13 @@ export interface Prospect {
 
 export type OutreachStatus = 'PENDING' | 'SENT' | 'FAILED';
 export type OutreachType = 'INITIAL' | 'FOLLOW_UP';
+
+/**
+ * The providers the app can send through. Brevo is used first (300/day on the
+ * free tier), Resend is the overflow (50/day), so one day's capacity is the
+ * sum of both. Keep this list in send order.
+ */
+export type EmailProviderName = 'brevo' | 'resend';
 export type OutreachStage = 0 | 1 | 2 | 3 | 4; // 0=Initial, 1-3=Followups, 4=CloseLoop
 
 export type CTAType = 
@@ -394,6 +410,10 @@ export interface OutreachRecord {
   sequenceStage: OutreachStage; 
   ctaType: CTAType | null; 
   angle: string | null; 
+  /** Which provider actually carried this email. Legacy records: undefined = Resend. */
+  provider?: EmailProviderName | null;
+  /** Provider-side message id (Resend id, Brevo messageId). */
+  providerMessageId?: string | null;
   resendMessageId: string | null;
   status: OutreachStatus;
   deliveryStatus: DeliveryStatus | null; 

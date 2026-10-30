@@ -368,10 +368,49 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
     }
   }
 
+  /**
+   * Marks a prospect read because the automation already handled it.
+   *
+   * When the AI writes and sends the audit email on its own, the operator has
+   * nothing left to review — leaving the row as "unread / New" in the pipeline
+   * just made the list look like it still needed attention. This sets
+   * `viewAddedAt` (the flag the pipeline treats as read) but deliberately does
+   * NOT bump `viewedCount`: nobody actually opened the prospect.
+   */
+  async markAsReadAfterAutomatedSend(id: string): Promise<void> {
+    try {
+      const collection = await getProspectsCollection();
+      const now = new Date().toISOString();
+      const prospect = await collection.findOne({ id });
+      if (!prospect) return;
+
+      const update: Record<string, unknown> = {
+        updatedAt: now,
+        autoSentAt: now,
+        readByAutomation: true,
+      };
+
+      // Only claim the "first read" slot if the operator has not already
+      // opened it — a manual view keeps its own timestamp.
+      if (!prospect.viewAddedAt) {
+        update.viewAddedAt = now;
+      }
+
+      await collection.updateOne({ id }, { $set: update });
+      logger.info(
+        `[ProspectPersistenceService] Marked prospect ${id} read after the automated send.`
+      );
+    } catch (error) {
+      logger.error(
+        `[ProspectPersistenceService] Failed to mark ${id} read after the automated send:`,
+        getErrorMessage(error)
+      );
+    }
+  }
+
     /**
    * Permanently deletes a prospect record.
-   */
-  async deleteProspect(id: string): Promise<void> {
+   */  async deleteProspect(id: string): Promise<void> {
     try {
       const collection = await getProspectsCollection();
       await collection.deleteOne({ id });

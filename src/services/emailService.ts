@@ -1,53 +1,147 @@
 import "server-only";
-import { getEmailClient } from "@/lib/email";
-import { env } from "@/lib/env";
-import { logger } from "@/lib/logger";
-import { ApplicationError, getErrorMessage } from "@/lib/errors";
-import { IEmailProvider, SendEmailInput, SendEmailOutput } from "@/services/emailProvider";
 
-export class EmailService implements IEmailProvider {
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors";
+import {
+  EMAIL_PROVIDER_LABELS,
+  ProviderCapacity,
+  describeCapacity,
+  totalRemaining,
+} from "@/lib/emailRouting";
+import { EmailProviderName } from "@/types";
+import {
+  EmailErrorKind,
+  IEmailProvider,
+  QuotaGateway,
+  SendEmailInput,
+  SendEmailOutput,
+} from "@/services/emailProvider";
+import { brevoEmailService } from "@/services/brevoEmailService";
+import { resendEmailService } from "@/services/resendEmailService";
+import { emailQuotaService } from "@/services/emailQuotaService";
+
+/**
+ * The single entry point every send goes through.
+ *
+ * Two providers, one budget: Brevo takes the first 300 emails of the day, then
+ * Resend carries the next 50 — 350 sends in total instead of the 100 the
+ * Resend-only setup allowed. When both are spent the send fails with a message
+ * that names the quotas, which is the same signal the automation pass uses to
+ * stop instead of burning a PDF render per prospect.
+ *
+ * Failover rules (see EmailErrorKind):
+ *   quota / auth  → nothing was sent, so the next provider gets the email
+ *   transient / permanent → the email may already be out, so it stops here
+ */
+export class EmailService {
+  constructor(
+    private readonly providers: Partial<Record<EmailProviderName, IEmailProvider>> = {
+      brevo: brevoEmailService,
+      resend: resendEmailService,
+    },
+    private readonly quota: QuotaGateway = emailQuotaService
+  ) {}
+
   async send(input: SendEmailInput): Promise<SendEmailOutput> {
-    if (!env.RESEND_FROM_EMAIL) {
-      throw new ApplicationError("RESEND_FROM_EMAIL is not configured.", "CONFIG_ERROR");
+    const plan = await this.quota.getSendPlan();
+
+    if (plan.length === 0) {
+      const capacities = await this.quota.getCapacities();
+      const error = this.exhaustedMessage(capacities);
+      logger.warn(`[EmailService] ${error}`);
+      return {
+        success: false,
+        providerMessageId: null,
+        provider: null,
+        error,
+        errorKind: "quota",
+      };
     }
 
-    const client = getEmailClient();
+    const failures: string[] = [];
+    let lastKind: EmailErrorKind = "quota";
 
-    try {
-      logger.info(`[EmailService] Sending email to ${input.to} with key ${input.idempotencyKey}...`);
-      
-      // Pass the Idempotency-Key header to Resend
-      const { data, error } = await client.emails.send({
-        from: env.RESEND_FROM_EMAIL,
-        to: input.to,
-        subject: input.subject,
-        html: input.html,
-        ...(input.text ? { text: input.text } : {}),
-        attachments: input.attachments?.map(a => ({
-          filename: a.filename,
-          content: a.content instanceof Uint8Array && !Buffer.isBuffer(a.content)
-            ? Buffer.from(a.content)
-            : a.content,
-          ...(a.contentType ? { contentType: a.contentType } : {}),
-        })),
-      }, {
-        headers: {
-          'Idempotency-Key': input.idempotencyKey
-        }
-      });
+    for (const name of plan) {
+      const provider = this.providers[name];
+      const label = EMAIL_PROVIDER_LABELS[name];
 
-      if (error) {
-        logger.error(`[EmailService] Resend API error: ${error.message}`);
-        return { success: false, providerMessageId: null, error: error.message };
+      if (!provider || !provider.isConfigured()) {
+        failures.push(`${label}: not configured`);
+        continue;
       }
 
-      logger.info(`[EmailService] Email accepted by Resend. Message ID: ${data?.id}`);
-      return { success: true, providerMessageId: data?.id || null, error: null };
+      let result: SendEmailOutput;
+      try {
+        result = await provider.send(input);
+      } catch (error) {
+        // A provider that throws instead of returning an error still must not
+        // be retried elsewhere — the request may have been accepted.
+        const message = getErrorMessage(error);
+        logger.error(`[EmailService] ${label} threw: ${message}`);
+        failures.push(`${label}: ${message}`);
+        return {
+          success: false,
+          providerMessageId: null,
+          provider: name,
+          error: failures.join(" | "),
+          errorKind: "transient",
+        };
+      }
 
-    } catch (err) {
-      logger.error(`[EmailService] Unexpected error sending email: ${getErrorMessage(err)}`);
-      return { success: false, providerMessageId: null, error: getErrorMessage(err) };
+      if (result.success) {
+        await this.quota.record(name);
+        logger.info(`[EmailService] Sent via ${label} to ${input.to}.`);
+        return result;
+      }
+
+      lastKind = result.errorKind ?? "permanent";
+      failures.push(result.error ?? `${label} failed`);
+
+      if (lastKind === "quota") {
+        await this.quota.markExhausted(name);
+        logger.warn(`[EmailService] ${label} is out of allowance, trying the next provider.`);
+        continue;
+      }
+
+      if (lastKind === "auth") {
+        logger.warn(`[EmailService] ${label} rejected the credentials, trying the next provider.`);
+        continue;
+      }
+
+      logger.error(`[EmailService] ${label} failed (${lastKind}); not retrying elsewhere.`);
+      return {
+        success: false,
+        providerMessageId: null,
+        provider: name,
+        error: failures.join(" | "),
+        errorKind: lastKind,
+      };
     }
+
+    return {
+      success: false,
+      providerMessageId: null,
+      provider: null,
+      error: failures.join(" | ") || "No email provider could accept the message.",
+      errorKind: lastKind,
+    };
+  }
+
+  /**
+   * Says exactly how much is left, and mentions "quota" so the auto-send pass
+   * recognises it as a provider-wide stop rather than a per-prospect skip.
+   */
+  private exhaustedMessage(capacities: ProviderCapacity[]): string {
+    const configured = capacities.filter((c) => c.configured);
+
+    if (configured.length === 0) {
+      return "No email provider is configured. Set BREVO_API_KEY (and RESEND_API_KEY as overflow).";
+    }
+
+    const remaining = totalRemaining(configured);
+    return `Daily email sending quota reached on every provider (${describeCapacity(
+      configured
+    )}) — ${remaining} sends left today. Sending resumes after 00:00 UTC.`;
   }
 }
 

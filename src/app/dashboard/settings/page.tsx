@@ -1,6 +1,12 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
-import { CheckCircle2, XCircle, Info, Shield, Mail, Brain, Search } from "lucide-react";
+import { CheckCircle2, XCircle, Info, Shield, Mail, Brain, Search, Gauge } from "lucide-react";
+import { emailQuotaService } from "@/services/emailQuotaService";
+import { EMAIL_PROVIDER_LABELS, ProviderCapacity, totalRemaining } from "@/lib/emailRouting";
+
+// Today's send counts come from the database, so this page must not be
+// pre-rendered at build time.
+export const dynamic = "force-dynamic";
 
 function StatusBadge({ configured }: { configured: boolean }) {
     return configured
@@ -20,8 +26,9 @@ function ConfigRow({ label, configured, description }: { label: string; configur
     );
 }
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
     const hasOpenAI = !!env.OPENAI_API_KEY;
+    const hasBrevo = !!env.BREVO_API_KEY;
     const hasResend = !!env.RESEND_API_KEY;
     const hasSerpApi = !!env.SERPAPI_API_KEY;
     const hasApify = !!env.APIFY_API_TOKEN && !!env.APIFY_ACTOR_ID;
@@ -29,6 +36,12 @@ export default function SettingsPage() {
     const hasGeoapify = !!env.GEOAPIFY_API_KEY;
     const hasAstra = !!env.ASTRA_DB_APPLICATION_TOKEN && !!env.ASTRA_DB_API_ENDPOINT;
     const hasAppPassword = !!env.APP_PASSWORD;
+
+    // Never let a database hiccup take the settings page down — the capacity
+    // panel simply stays hidden when today's counts cannot be read.
+    const capacity: ProviderCapacity[] | null = await emailQuotaService
+        .getCapacities()
+        .catch(() => null);
 
     return (
         <div className="flex flex-col gap-6">
@@ -94,12 +107,56 @@ export default function SettingsPage() {
                     </CardHeader>
                     <CardContent className="space-y-1">
                         <ConfigRow
+                            label="Brevo API"
+                            configured={hasBrevo}
+                            description="Primary sender — carries the first 300 emails of the day"
+                        />
+                        <ConfigRow
                             label="Resend API"
                             configured={hasResend}
-                            description="Sends audit emails and follow-up sequences"
+                            description="Overflow sender — takes the next 50 once Brevo is spent"
                         />
                     </CardContent>
                 </Card>
+
+                {capacity && (
+                    <Card>
+                        <CardHeader className="flex flex-row items-center gap-2">
+                            <Gauge className="h-4 w-4 text-primary" />
+                            <CardTitle className="text-sm font-semibold">Send capacity today</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="flex items-baseline justify-between">
+                                <span className="text-sm text-muted-foreground">Emails left today</span>
+                                <span className="text-2xl font-bold text-foreground">{totalRemaining(capacity)}</span>
+                            </div>
+
+                            {capacity.map((provider) => {
+                                const percent = provider.limit > 0
+                                    ? Math.min(100, Math.round((provider.used / provider.limit) * 100))
+                                    : 0;
+
+                                return (
+                                    <div key={provider.name} className="space-y-1">
+                                        <div className="flex items-center justify-between text-xs">
+                                            <span className="font-medium text-foreground">{EMAIL_PROVIDER_LABELS[provider.name]}</span>
+                                            <span className="text-muted-foreground">
+                                                {provider.configured ? `${provider.used} / ${provider.limit}` : "Not configured"}
+                                            </span>
+                                        </div>
+                                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                                            <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
+                                        </div>
+                                    </div>
+                                );
+                            })}
+
+                            <p className="text-xs text-muted-foreground">
+                                Brevo sends first, Resend takes over when Brevo&apos;s daily quota is spent. Both reset at 00:00 UTC.
+                            </p>
+                        </CardContent>
+                    </Card>
+                )}
 
                 <Card>
                     <CardHeader className="flex flex-row items-center gap-2">

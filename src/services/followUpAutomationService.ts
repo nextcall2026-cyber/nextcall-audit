@@ -192,7 +192,11 @@ export class FollowUpAutomationService {
     }
 
     if (sendResult.success) {
-      await outreachPersistenceService.markAsSent(pendingRecord.id, sendResult.providerMessageId || "no-id-returned");
+      await outreachPersistenceService.markAsSent(
+        pendingRecord.id,
+        sendResult.providerMessageId || "no-id-returned",
+        sendResult.provider ?? "resend"
+      );
 
       if (stage === 1) {
         const nextDate = new Date(baseOpenedAtMs + FOLLOW_UP_2_DELAY_MS);

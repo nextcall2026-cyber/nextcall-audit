@@ -59,10 +59,16 @@ export const MAX_REPORTS_PER_PASS = 3;
  * A provider-wide limit ("You have reached your daily email sending quota",
  * a 429, a rate limit) fails every remaining prospect too, so the pass stops
  * instead of burning a PDF render per attempt.
+ *
+ * Rejected credentials and Brevo's "unrecognised IP address" guard count as
+ * well: they are not per-prospect problems, and every retry would fail the
+ * same way.
  */
 export function isProviderLimitError(error: string | null | undefined): boolean {
   if (!error) return false;
-  return /daily email sending quota|quota|rate limit|too many requests|429/i.test(error);
+  return /daily email sending quota|quota|rate limit|too many requests|429|unrecognised ip|unauthor|api[- ]?key|forbidden|not configured|401|403/i.test(
+    error
+  );
 }
 
 class AutoSendService {
@@ -175,12 +181,18 @@ class AutoSendService {
       if (outcome.ok) {
         sent += 1;
         remaining -= 1;
+
+        // The AI just wrote and sent this prospect's audit email by itself, so
+        // there is nothing left for the operator to review: mark the pipeline
+        // row read instead of leaving it flagged "New / unread".
+        await prospectPersistenceService.markAsReadAfterAutomatedSend(prospect.id);
       } else {
         logger.warn(`[AutoSendService] Skipped ${prospect.id}: ${outcome.error}`);
 
-        // A provider-wide limit (Resend daily quota / rate limit) will fail
-        // every remaining prospect too, and each attempt costs a PDF render
-        // and a FAILED record. Stop the pass and retry after it resets.
+        // A provider-wide limit (both Brevo and Resend out of daily quota, or
+        // a rate limit) will fail every remaining prospect too, and each
+        // attempt costs a PDF render and a FAILED record. Stop the pass and
+        // retry after the quotas reset.
         if (isProviderLimitError(outcome.error)) {
           providerLimit = outcome.error;
           break;

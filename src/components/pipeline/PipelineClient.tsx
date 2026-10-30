@@ -221,6 +221,14 @@ export default function PipelineClient() {
                                         {isUnread && (
                                             <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-medium uppercase tracking-wide">New</span>
                                         )}
+                                        {p.readByAutomation && (
+                                            <span
+                                                title="The automation wrote and sent this audit email, so it is already marked read"
+                                                className="text-[10px] px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded font-medium uppercase tracking-wide"
+                                            >
+                                                AI sent
+                                            </span>
+                                        )}
                                     </div>
                                     <span className="text-xs text-gray-500 mt-1">
                                         Status: <span className="font-medium text-slate-700">{p.pipelineStatus.replace(/_/g, " ")}</span>

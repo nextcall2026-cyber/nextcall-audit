@@ -194,7 +194,8 @@ class OutreachSendService {
     if (sendResult.success) {
       await outreachPersistenceService.markAsSent(
         pendingRecord.id,
-        sendResult.providerMessageId || "no-id-returned"
+        sendResult.providerMessageId || "no-id-returned",
+        sendResult.provider ?? "resend"
       );
 
       // Recalculate priority because outreach state changed
@@ -212,7 +213,7 @@ class OutreachSendService {
     return {
       ok: false,
       status: 500,
-      error: `Failed to send email via Resend. ${sendResult.error ?? ""}`.trim(),
+      error: `Failed to send email. ${sendResult.error ?? ""}`.trim(),
     };
   }
 

@@ -18,7 +18,7 @@ export interface AutomationSettings {
   autoSendEnabled: boolean;
   /** When true nothing is sent — each candidate produces a feed entry instead. */
   dryRun: boolean;
-  /** Hard ceiling on initial emails per calendar day (Resend free tier = 100/day). */
+  /** Hard ceiling on initial emails per calendar day (Brevo 300 + Resend 50). */
   dailyCap: number;
   /** When false, sending is allowed around the clock. */
   businessHoursEnabled: boolean;
@@ -29,7 +29,12 @@ export interface AutomationSettings {
 }
 
 const SETTINGS_DOC_ID = "automation-settings";
-export const MAX_DAILY_CAP = 100;
+/**
+ * The most a day can carry: Brevo's 300 free emails plus the 50 Resend is
+ * allowed to add on top. Anything above this could never actually be sent, so
+ * the cap is clamped here rather than letting the automation hit a wall.
+ */
+export const MAX_DAILY_CAP = 350;
 export const BUSINESS_HOURS_START = 9;
 export const BUSINESS_HOURS_END = 18;
 

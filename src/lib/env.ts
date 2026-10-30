@@ -30,6 +30,19 @@ const envSchema = z.object({
   //Email Outreach (Resend) 
   RESEND_WEBHOOK_SECRET: z.string().optional(), // NEW
 
+  // Email Outreach (Brevo) — primary sender, Resend becomes the overflow.
+  // The key is a server secret: never expose it with NEXT_PUBLIC_.
+  BREVO_API_KEY: z.string().optional(),
+  /** "Name <email@domain>" or a bare address. Falls back to RESEND_FROM_EMAIL. */
+  BREVO_FROM_EMAIL: z.string().optional(),
+  /** Shared secret Brevo echoes back on webhook calls (?token=...). */
+  BREVO_WEBHOOK_TOKEN: z.string().optional(),
+
+  // Daily capacity per provider. Brevo's free tier allows 300/day and the
+  // plan caps Resend at 50, so one day can carry 350 emails in total.
+  EMAIL_DAILY_LIMIT_BREVO: z.coerce.number().int().nonnegative().optional().default(300),
+  EMAIL_DAILY_LIMIT_RESEND: z.coerce.number().int().nonnegative().optional().default(50),
+
   // Authentication
   APP_PASSWORD: z.string().min(8, "APP_PASSWORD must be at least 8 characters"),
 

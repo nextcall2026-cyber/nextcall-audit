@@ -104,7 +104,11 @@ export async function POST(request: NextRequest) {
     // Success without a provider message id still means Resend accepted the
     // email — reverting here would cause a duplicate send on retry.
     if (sendResult.success) {
-      await outreachPersistenceService.markAsSent(pendingRecord.id, sendResult.providerMessageId || "no-id-returned");
+      await outreachPersistenceService.markAsSent(
+        pendingRecord.id,
+        sendResult.providerMessageId || "no-id-returned",
+        sendResult.provider ?? "resend"
+      );
       
       if (stage < 4) {
         const nextDate = new Date();
@@ -123,7 +127,7 @@ export async function POST(request: NextRequest) {
       await prospectPersistenceService.revertOutreachState(prospectId, transition.expected);
       await outreachPersistenceService.markAsFailed(pendingRecord.id, sendResult.error || "Unknown error");
       return NextResponse.json(
-        { error: "Failed to send follow-up via Resend.", details: sendResult.error },
+        { error: "Failed to send follow-up.", details: sendResult.error },
         { status: 500 }
       );
     }
