@@ -6,6 +6,9 @@ import { outreachPersistenceService } from "@/services/outreachPersistenceServic
 import { notificationService } from "@/services/notificationService";
 import { outreachSendService } from "@/services/outreachSendService";
 import { pickBestEmailForBusiness } from "@/services/contactEmailPicker";
+import { aiReportService } from "@/services/aiReportService";
+import { auditPersistenceService } from "@/services/auditPersistenceService";
+import { Business } from "@/types";
 import {
   automationSettingsService,
   currentHourInTimezone,
@@ -13,6 +16,7 @@ import {
   startOfDayIso,
 } from "@/services/automationSettingsService";
 import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors";
 
 /**
  * Auto-send pass: emails the initial audit to brand-new prospects that are
@@ -44,6 +48,12 @@ export interface AutoSendReport {
  * cut off half-way through. The next pass continues 15 minutes later.
  */
 export const MAX_SENDS_PER_PASS = 15;
+
+/**
+ * Reports generated inside one pass. Each is an LLM call, so the pass stays
+ * inside its time budget and the rest are picked up 15 minutes later.
+ */
+export const MAX_REPORTS_PER_PASS = 3;
 
 /**
  * A provider-wide limit ("You have reached your daily email sending quota",
@@ -111,6 +121,7 @@ class AutoSendService {
     let sent = 0;
     let providerLimit: string | null = null;
     let passBudgetReached = false;
+    let reportsGenerated = 0;
 
     for (const prospect of candidates) {
       if (remaining <= 0) break;
@@ -144,18 +155,34 @@ class AutoSendService {
       }
 
       const result = await outreachSendService.sendInitialOutreach(prospect.id);
+      let outcome = result;
 
-      if (result.ok) {
+      // A prospect whose deterministic audit exists but whose AI report does
+      // not (the report failed when it was created) would sit in the queue
+      // forever. Build it here and send in the same pass.
+      if (
+        !outcome.ok &&
+        /no ai audit report/i.test(outcome.error) &&
+        business &&
+        reportsGenerated < MAX_REPORTS_PER_PASS
+      ) {
+        reportsGenerated += 1;
+        if (await this.generateMissingReport(business, prospect.businessId)) {
+          outcome = await outreachSendService.sendInitialOutreach(prospect.id);
+        }
+      }
+
+      if (outcome.ok) {
         sent += 1;
         remaining -= 1;
       } else {
-        logger.warn(`[AutoSendService] Skipped ${prospect.id}: ${result.error}`);
+        logger.warn(`[AutoSendService] Skipped ${prospect.id}: ${outcome.error}`);
 
         // A provider-wide limit (Resend daily quota / rate limit) will fail
         // every remaining prospect too, and each attempt costs a PDF render
         // and a FAILED record. Stop the pass and retry after it resets.
-        if (isProviderLimitError(result.error)) {
-          providerLimit = result.error;
+        if (isProviderLimitError(outcome.error)) {
+          providerLimit = outcome.error;
           break;
         }
       }
@@ -192,6 +219,29 @@ class AutoSendService {
         ? `${MAX_SENDS_PER_PASS} per pass — ${Math.max(0, candidates.length - sent)} still queued for the next pass`
         : "",
     };
+  }
+  /**
+   * Builds the AI report a queued prospect is missing, so the send can go out
+   * in the same pass without anyone opening the pipeline by hand.
+   */
+  private async generateMissingReport(
+    business: Business,
+    businessId: string
+  ): Promise<boolean> {
+    try {
+      const storedAudit = await auditPersistenceService.getLatestAudit(businessId);
+      if (!storedAudit) return false;
+
+      const report = await aiReportService.generateAuditReport(business, storedAudit.audit);
+      await auditPersistenceService.saveAIReport(storedAudit.id, report);
+      logger.info(`[AutoSendService] Generated the missing AI report for ${businessId}.`);
+      return true;
+    } catch (error) {
+      logger.warn(
+        `[AutoSendService] Could not generate the AI report for ${businessId}: ${getErrorMessage(error)}`
+      );
+      return false;
+    }
   }
 }
 
