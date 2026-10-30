@@ -13,6 +13,8 @@ import { getErrorMessage } from "@/lib/errors";
  *   GET https://<app>/api/automation/sweep   header: x-cron-secret=<CRON_SECRET>
  *   (or ?secret=<CRON_SECRET> when headers are not configurable)
  *
+ *   Vercel Cron calls the same URL with `Authorization: Bearer <CRON_SECRET>`.
+ *
  *   POST /api/automation/sweep  — from the dashboard ("Run now"), authorised by
  *   the normal auth cookie the middleware already validates.
  *
@@ -26,6 +28,7 @@ async function handleSweep(request: NextRequest) {
   const auth = authorizeSweep({
     headerSecret: request.headers.get("x-cron-secret"),
     querySecret: request.nextUrl.searchParams.get("secret"),
+    authorizationHeader: request.headers.get("authorization"),
     authCookie: request.cookies.get("nextcall_auth")?.value ?? null,
     cronSecret: process.env.CRON_SECRET,
     appPassword: process.env.APP_PASSWORD,

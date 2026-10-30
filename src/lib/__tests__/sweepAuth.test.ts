@@ -24,6 +24,21 @@ describe("authorizeSweep", () => {
     });
   });
 
+  it("lets Vercel Cron in with its Bearer header", () => {
+    expect(
+      authorizeSweep({ ...base, authorizationHeader: "Bearer cron-secret-value" })
+    ).toEqual({ ok: true, via: "cron-secret" });
+    expect(
+      authorizeSweep({ ...base, authorizationHeader: "bearer cron-secret-value" })
+    ).toEqual({ ok: true, via: "cron-secret" });
+  });
+
+  it("rejects a Bearer header that is not the secret", () => {
+    expect(
+      authorizeSweep({ ...base, authorizationHeader: "Bearer wrong-value" }).ok
+    ).toBe(false);
+  });
+
   it("lets the dashboard in with its auth cookie", () => {
     expect(authorizeSweep({ ...base, authCookie: "app-password-value" })).toEqual({
       ok: true,

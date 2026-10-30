@@ -18,6 +18,8 @@ export interface SweepAuthInput {
   headerSecret: string | null;
   /** Value of the `secret` query parameter, if any. */
   querySecret: string | null;
+  /** Value of the `authorization` header, if any (Vercel Cron sends Bearer). */
+  authorizationHeader?: string | null;
   /** Value of the `nextcall_auth` cookie, if any. */
   authCookie: string | null;
   /** process.env.CRON_SECRET */
@@ -31,8 +33,20 @@ export type SweepAuthResult =
   | { ok: false; reason: string };
 
 export function authorizeSweep(input: SweepAuthInput): SweepAuthResult {
-  const { headerSecret, querySecret, authCookie, cronSecret, appPassword } = input;
-  const providedSecret = headerSecret ?? querySecret;
+  const {
+    headerSecret,
+    querySecret,
+    authorizationHeader,
+    authCookie,
+    cronSecret,
+    appPassword,
+  } = input;
+
+  // Vercel Cron calls with `Authorization: Bearer <CRON_SECRET>`.
+  const bearerSecret = authorizationHeader?.toLowerCase().startsWith("bearer ")
+    ? authorizationHeader.slice(7).trim()
+    : null;
+  const providedSecret = headerSecret ?? querySecret ?? bearerSecret;
 
   if (cronSecret && providedSecret && providedSecret === cronSecret) {
     return { ok: true, via: "cron-secret" };

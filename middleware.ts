@@ -30,10 +30,18 @@ export function middleware(request: NextRequest) {
     const provided =
       request.headers.get('x-cron-secret') ??
       request.nextUrl.searchParams.get('secret');
+    const authorization = request.headers.get('authorization');
+    const bearer =
+      authorization && authorization.toLowerCase().startsWith('bearer ')
+        ? authorization.slice(7).trim()
+        : null;
     const cookie = request.cookies.get('nextcall_auth')?.value;
     const appPassword = process.env.APP_PASSWORD;
 
-    if ((cronSecret && provided === cronSecret) || (appPassword && cookie === appPassword)) {
+    if (
+      (cronSecret && (provided === cronSecret || bearer === cronSecret)) ||
+      (appPassword && cookie === appPassword)
+    ) {
       return NextResponse.next();
     }
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
