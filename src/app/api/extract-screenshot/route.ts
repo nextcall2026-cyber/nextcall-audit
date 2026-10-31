@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { generateLLMResponse } from "@/lib/ai";
+import { AI_CHAINS } from "@/lib/ai/chains";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 
@@ -63,6 +64,7 @@ export async function POST(request: NextRequest) {
         maxOutputTokens: 1000,
         json: true,
         thinking: "off",
+        model: AI_CHAINS.visionListing,
       });
 
       const raw = llm.text;

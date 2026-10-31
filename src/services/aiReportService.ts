@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { Business, AuditResult, AuditReport } from "@/types";
 import { generateLLMResponse } from "@/lib/ai";
+import { AI_CHAINS } from "@/lib/ai/chains";
 import { logger } from "@/lib/logger";
 
 import { getErrorMessage } from "@/lib/errors";
@@ -188,7 +189,9 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
  ${audit.opportunities.length > 0 ? audit.opportunities.map(o => `- ${o.title}: ${o.evidence}`).join("\n") : "- None mapped by deterministic engine."}
 `;
 
-    try {
+    // One attempt against one chain. The router already falls back between the
+    // models inside a chain, so this only re-runs when the whole chain is spent.
+    const attempt = async (chain: string) => {
       const llm = await generateLLMResponse({
         system: systemPrompt,
         user: userPrompt,
@@ -201,14 +204,14 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
         maxOutputTokens: 8000,
         json: true,
         thinking: "low", // small reasoning budget improves prose quality for this long-form report
+        model: chain,
       });
+
       logger.info(
         `[AIReportService] Report drafted by ${llm.provider} (${llm.model})${llm.fallback ? " [fallback]" : ""}.`
       );
 
-      const content = llm.text;
-
-      const parsedJson = JSON.parse(content);
+      const parsedJson = JSON.parse(llm.text);
       const validationResult = ReportSchema.safeParse(parsedJson);
 
       if (!validationResult.success) {
@@ -216,12 +219,32 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
         throw new Error("AI response did not match the required expanded schema.");
       }
 
-      logger.info(`[AIReportService] Successfully generated advanced report for ${business.name}.`);
       return validationResult.data;
+    };
 
+    try {
+      const report = await attempt(AI_CHAINS.reportMain);
+      logger.info(`[AIReportService] Successfully generated advanced report for ${business.name}.`);
+      return report;
     } catch (error) {
-      logger.error(`[AIReportService] Failed to generate report: ${getErrorMessage(error)}`);
-      throw new Error(`Failed to generate AI audit report: ${getErrorMessage(error)}`);
+      // REPORT-MAIN is spent or failing — the backup chain exists for exactly
+      // this moment, and it is a different set of models.
+      logger.warn(
+        `[AIReportService] REPORT-MAIN failed, trying REPORT-BACKUP: ${getErrorMessage(error)}`
+      );
+
+      try {
+        const report = await attempt(AI_CHAINS.reportBackup);
+        logger.info(
+          `[AIReportService] Report recovered on the backup chain for ${business.name}.`
+        );
+        return report;
+      } catch (backupError) {
+        logger.error(
+          `[AIReportService] Failed to generate report on both chains: ${getErrorMessage(backupError)}`
+        );
+        throw new Error(`Failed to generate AI audit report: ${getErrorMessage(backupError)}`);
+      }
     }
   }
 }

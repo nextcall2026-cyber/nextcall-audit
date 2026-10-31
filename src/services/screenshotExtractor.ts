@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 import { generateLLMResponse } from "@/lib/ai";
+import { AI_CHAINS } from "@/lib/ai/chains";
 import { logger } from "@/lib/logger";
 
 /**
@@ -104,6 +105,9 @@ export async function extractFromScreenshot(
       maxOutputTokens: 1200,
       json: true,
       thinking: "off",
+      // Each screenshot type has its own chain, so a slow Google read never
+      // holds up the Facebook one and neither competes for the same quota.
+      model: kind === "google" ? AI_CHAINS.visionListing : AI_CHAINS.visionSocial,
     });
 
     if (!llm.text) break;

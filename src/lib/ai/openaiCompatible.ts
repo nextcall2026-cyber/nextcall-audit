@@ -126,7 +126,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
     }
 
     const body: Record<string, unknown> = {
-      model: this.model,
+      // The chain name wins when the caller picked one: the router exposes
+      // every chain as a model, so one key serves all of them.
+      model: req.model ?? this.model,
       messages,
       temperature: req.temperature ?? 0.4,
       max_tokens: req.maxOutputTokens,

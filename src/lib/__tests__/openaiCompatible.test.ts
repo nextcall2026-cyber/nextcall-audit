@@ -60,6 +60,34 @@ describe("OpenAICompatibleProvider (free fallback slot)", () => {
     expect(JSON.stringify(body.messages)).toContain("data:image/png;base64,abc");
   });
 
+  it("uses the chain name from the request instead of the slot's default model", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", mockFetch);
+
+    await new OpenAICompatibleProvider(1).complete({
+      user: "write the report",
+      maxOutputTokens: 100,
+      model: "auto:report-main",
+    });
+
+    const body = JSON.parse(String((mockFetch.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(body.model).toBe("auto:report-main");
+  });
+
+  it("falls back to the slot's model when no chain is given", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", mockFetch);
+
+    await new OpenAICompatibleProvider(1).complete({ user: "hi", maxOutputTokens: 10 });
+
+    const body = JSON.parse(String((mockFetch.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(body.model).toBe("llama-test");
+  });
+
   it("classifies auth errors so the breaker parks the slot", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("unauthorized", { status: 401 })));
     const err = await new OpenAICompatibleProvider(1)

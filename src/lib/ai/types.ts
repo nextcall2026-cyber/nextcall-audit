@@ -68,6 +68,14 @@ export interface LLMRequest {
    * "low" keeps a small reasoning budget for higher-stakes prose.
    */
   thinking?: ThinkingLevel;
+  /**
+   * Which routing chain to use, e.g. "auto:vision-listing".
+   *
+   * The router exposes every chain as a model name, so one API key can serve
+   * all of them — the chain is chosen per call. Providers that cannot route
+   * (Gemini, OpenAI direct) ignore this and use their own model.
+   */
+  model?: string;
 }
 
 export interface LLMResponse {
