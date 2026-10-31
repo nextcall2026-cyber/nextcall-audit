@@ -86,16 +86,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Both images are read at the same time, so the wait is ~6-8s instead of
-    // the sum of two calls.
-    const [google, facebook] = await Promise.all([
-      extractFromScreenshot("google", googleFile),
-      extractFromScreenshot("facebook", facebookFile),
+    // Both images are read at the same time, each with a hard cap.
+    // Google is required — without a name there is nothing to audit.
+    // Facebook is best-effort: if that chain is slow or down we still queue the
+    // business, just without the email, instead of failing the whole ingest.
+    const [googleSettled, facebookSettled] = await Promise.allSettled([
+      extractFromScreenshot("google", googleFile, { timeoutMs: 25_000, attempts: 1 }),
+      extractFromScreenshot("facebook", facebookFile, { timeoutMs: 25_000, attempts: 1 }),
     ]);
+
+    if (googleSettled.status === "rejected") {
+      const reason = googleSettled.reason;
+      if (reason instanceof ScreenshotError) throw reason;
+      throw new ScreenshotError(
+        "The Google screenshot could not be read in time. Please try again with a clearer screenshot."
+      );
+    }
+
+    const google = googleSettled.value;
+    const facebook = facebookSettled.status === "fulfilled" ? facebookSettled.value : null;
+    const facebookFailed = facebookSettled.status === "rejected";
+
+    if (facebookFailed) {
+      logger.warn(
+        `[API /businesses/manual] Facebook read failed, queueing without it: ${getErrorMessage(
+          (facebookSettled as PromiseRejectedResult).reason
+        )}`
+      );
+    }
 
     // Google wins where both have a value (it is the canonical listing);
     // Facebook fills the gaps — above all the email address.
-    const name = cleanValue(google.name) ?? cleanValue(facebook.name);
+    const name = cleanValue(google.name) ?? cleanValue(facebook?.name);
     if (!name) {
       return NextResponse.json(
         {
@@ -106,13 +128,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const website = normalizeWebsite(cleanValue(google.website) ?? cleanValue(facebook.website));
-    const phone = cleanValue(google.phone) ?? cleanValue(facebook.phone);
-    const address = cleanValue(google.address) ?? cleanValue(facebook.address);
-    const category = cleanValue(google.category) ?? cleanValue(facebook.category);
-    const email = (cleanValue(facebook.email) ?? cleanValue(google.email))?.toLowerCase() ?? null;
-    const rating = google.rating ?? facebook.rating ?? null;
-    const reviewCount = google.reviewCount ?? facebook.reviewCount ?? null;
+    const website = normalizeWebsite(cleanValue(google.website) ?? cleanValue(facebook?.website));
+    const phone = cleanValue(google.phone) ?? cleanValue(facebook?.phone);
+    const address = cleanValue(google.address) ?? cleanValue(facebook?.address);
+    const category = cleanValue(google.category) ?? cleanValue(facebook?.category);
+    const email = (cleanValue(facebook?.email) ?? cleanValue(google.email))?.toLowerCase() ?? null;
+    const rating = google.rating ?? facebook?.rating ?? null;
+    const reviewCount = google.reviewCount ?? facebook?.reviewCount ?? null;
 
     // 1. Duplicate check — one lookup, no collection scan.
     const dedupeKey = dedupeKeyFor(name, website);
@@ -151,7 +173,7 @@ export async function POST(request: NextRequest) {
       providerIds: { manual: id },
       status: "active",
       sources: ["MANUAL"],
-      notes: buildNotes(facebook),
+      notes: buildNotes(facebook ?? {}),
       dedupeKey,
       enrichment: email
         ? {
@@ -195,6 +217,12 @@ export async function POST(request: NextRequest) {
       businessName: name,
       emailFound: Boolean(email),
       hasWebsite: Boolean(website),
+      ...(facebookFailed
+        ? {
+            warning:
+              "The Facebook screenshot could not be read, so no email was found. The audit will still run.",
+          }
+        : {}),
     });
   } catch (error) {
     if (error instanceof ScreenshotError) {

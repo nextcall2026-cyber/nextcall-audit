@@ -76,6 +76,12 @@ export interface LLMRequest {
    * (Gemini, OpenAI direct) ignore this and use their own model.
    */
   model?: string;
+  /**
+   * Hard cap on the request. A free routing chain can pick a slow model and
+   * sit there; without this the caller waits forever. Default 90s (long
+   * reports need room), but interactive calls pass something much shorter.
+   */
+  timeoutMs?: number;
 }
 
 export interface LLMResponse {

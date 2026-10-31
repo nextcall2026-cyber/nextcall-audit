@@ -204,7 +204,11 @@ export default function ScreenshotClient() {
       }
 
       setLastQueued({ name: data.businessName, emailFound: Boolean(data.emailFound) });
-      toast.success("Added to the queue", `${data.businessName} will be audited in the background.`);
+      if (data.warning) {
+        toast.warning("Queued — but check the email", data.warning);
+      } else {
+        toast.success("Added to the queue", `${data.businessName} will be audited in the background.`);
+      }
       resetForm();
       void loadQueue();
     } catch (err) {

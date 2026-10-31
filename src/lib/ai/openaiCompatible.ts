@@ -50,6 +50,9 @@ function readEnv(name: string): string {
   return (process.env[name] ?? "").trim();
 }
 
+/** Long reports need room; interactive calls pass a shorter `timeoutMs`. */
+const DEFAULT_TIMEOUT_MS = 90_000;
+
 function hostOf(baseUrl: string): string {
   try {
     return new URL(baseUrl).host;
@@ -146,10 +149,19 @@ export class OpenAICompatibleProvider implements LLMProvider {
           Authorization: `Bearer ${this.access}`,
         },
         body: JSON.stringify(body),
+        // A slow routing chain must not hold the request open forever.
+        signal: AbortSignal.timeout(req.timeoutMs ?? DEFAULT_TIMEOUT_MS),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new ProviderError(this.id, "transient", `Network error reaching ${hostOf(this.baseUrl)}: ${message}`);
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+      throw new ProviderError(
+        this.id,
+        "transient",
+        timedOut
+          ? `No response from ${hostOf(this.baseUrl)} within ${req.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms`
+          : `Network error reaching ${hostOf(this.baseUrl)}: ${message}`
+      );
     }
 
     if (!res.ok) {

@@ -82,7 +82,8 @@ export class ScreenshotError extends Error {
 
 export async function extractFromScreenshot(
   kind: ScreenshotKind,
-  file: File
+  file: File,
+  options: { timeoutMs?: number; attempts?: number } = {}
 ): Promise<ExtractedScreenshotFields> {
   if (!file.type.startsWith("image/")) {
     throw new ScreenshotError("One of the uploaded files is not an image. Use PNG, JPG or WEBP.", 400);
@@ -93,10 +94,11 @@ export async function extractFromScreenshot(
 
   const bytes = Buffer.from(await file.arrayBuffer());
   const label = kind === "google" ? "Google Business Profile" : "Facebook About";
+  const attempts = Math.max(1, options.attempts ?? 2);
 
   let parsed: ExtractedScreenshotFields | null = null;
 
-  for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
+  for (let attempt = 1; attempt <= attempts && !parsed; attempt++) {
     const llm = await generateLLMResponse({
       system: kind === "google" ? GOOGLE_PROMPT : FACEBOOK_PROMPT,
       user: `Extract the business details from this ${label} screenshot. If a field is not visible, return null for it.`,
@@ -108,6 +110,7 @@ export async function extractFromScreenshot(
       // Each screenshot type has its own chain, so a slow Google read never
       // holds up the Facebook one and neither competes for the same quota.
       model: kind === "google" ? AI_CHAINS.visionListing : AI_CHAINS.visionSocial,
+      timeoutMs: options.timeoutMs,
     });
 
     if (!llm.text) break;
