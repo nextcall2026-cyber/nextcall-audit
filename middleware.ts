@@ -25,9 +25,13 @@ export function middleware(request: NextRequest) {
   // UptimeRobot, Vercel Cron) cannot send a cookie, so it authenticates with
   // the shared CRON_SECRET inside the route instead. The dashboard heartbeat
   // and buttons send the normal cookie and are still checked below.
+  //
+  // /api/workers/* are the background workers (audit, and later send/followup):
+  // the scheduler calls them every minute, so they follow the same rule.
   if (
     pathname === '/api/automation/sweep' ||
-    pathname === '/api/automation/tick'
+    pathname === '/api/automation/tick' ||
+    pathname.startsWith('/api/workers/')
   ) {
     const cronSecret = process.env.CRON_SECRET;
     const provided =

@@ -137,3 +137,8 @@ export async function getNotificationsCollection() {
 export async function getSettingsCollection() {
   return getEnsuredCollection("settings");
 }
+
+/** Background job queue (audit worker, and later the sender/copywriter). */
+export async function getAuditJobsCollection() {
+  return getEnsuredCollection("audit_jobs");
+}

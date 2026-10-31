@@ -1,52 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { z } from "zod";
 import { Business } from "@/types";
 import { persistenceService } from "@/services/persistenceService";
 import { prospectPersistenceService } from "@/services/prospectPersistenceService";
-import { outreachPersistenceService } from "@/services/outreachPersistenceService";
 import { getBusinessesCollection } from "@/lib/db";
-import { enrichmentService } from "@/services/enrichmentService";
-import { auditPersistenceService } from "@/services/auditPersistenceService";
-import { auditEngine } from "@/services/auditService";
-import { aiReportService } from "@/services/aiReportService";
-import { priorityService } from "@/services/priorityService";
-import { mergeNotesIntoEnrichment, parseBusinessNotes } from "@/services/notesParser";
-import { applyWebsiteAuditBackfill } from "@/services/websiteAuditBackfill";
-import { pickBestEmailForBusiness } from "@/services/contactEmailPicker";
-import { opportunityService } from "@/services/opportunityService";
-import { notificationService } from "@/services/notificationService";
+import {
+  cleanValue,
+  extractFromScreenshot,
+  ScreenshotError,
+} from "@/services/screenshotExtractor";
+import { jobQueueService } from "@/services/jobQueueService";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
-
 import { getErrorMessage } from "@/lib/errors";
-const ManualBusinessSchema = z.object({
-  name: z.string().min(1, "Business name is required"),
-  phone: z.string().trim().optional().nullable(),
-  website: z.string().trim().optional().nullable(),
-  address: z.string().trim().optional().nullable(),
-  city: z.string().trim().optional().nullable(),
-  state: z.string().trim().optional().nullable(),
-  zip: z.string().trim().optional().nullable(),
-  country: z.string().trim().optional().nullable(),
-  rating: z.number().min(0).max(5).optional().nullable(),
-  reviewCount: z.number().int().min(0).optional().nullable(),
-  category: z.string().trim().optional().nullable(),
-  email: z.string().trim().email("Invalid email address").optional().nullable(),
-  notes: z.string().trim().optional().nullable(),
-  force: z.boolean().optional(),
-});
 
-function normalizeWebsite(input: string | null | undefined): string | null {
+/**
+ * Ingest: two screenshots in, one queued audit out.
+ *
+ * This used to do the whole job — crawl, audit, AI report, pipeline — inside
+ * one request, so a 30–60 second run could be cut off by the host and lost.
+ * Now it does only what needs the images (read them) and hands the slow work
+ * to the audit worker through the job queue. The response comes back in a few
+ * seconds and the operator can drop the next business straight away.
+ *
+ * The screenshots are read and discarded — nothing is stored, so there is no
+ * blob storage to pay for and no cleanup job to run.
+ */
+
+function normalizeWebsite(input: string | null): string | null {
   if (!input) return null;
   const trimmed = input.trim();
   if (!trimmed) return null;
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return `https://${trimmed}`;
   return trimmed;
-}
-
-function normalizeName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function domainOf(url: string): string | null {
@@ -58,297 +44,193 @@ function domainOf(url: string): string | null {
   }
 }
 
-function businessHasEmail(business: Business, email: string | null): boolean {
-  if (!email) return false;
-  const known = [
-    business.enrichment?.preferredEmail,
-    ...(business.enrichment?.emails ?? []).map((e) => e.address),
-  ]
-    .filter((value): value is string => Boolean(value))
-    .map((value) => value.toLowerCase());
-  return known.includes(email);
+function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 /**
- * Duplicate guard: one business should exist only once. Matches an incoming
- * screenshot entry against stored businesses by website domain, normalized
- * name ("Deal's Plumbing" == "Deals Plumbing"), or the provided email.
- * Fails open (returns null) if the lookup itself errors, so creation is
- * never blocked by an infrastructure hiccup.
+ * A single cheap key so the duplicate check is one lookup instead of a full
+ * collection scan: the website domain when there is one, otherwise the
+ * squashed business name. A duplicate that slips past this (same business,
+ * different domain) is still caught later by the one-business-one-email guard
+ * at send time.
  */
-async function findDuplicateBusiness(
-  candidate: { name: string; website: string | null; email: string | null }
-): Promise<Business | null> {
-  try {
-    const collection = await getBusinessesCollection();
-    const docs = (await collection.find({}).toArray()) as unknown as Business[];
-    const candidateDomain = candidate.website ? domainOf(candidate.website) : null;
-    const candidateName = normalizeName(candidate.name);
-    return (
-      docs.find((business) => {
-        if (candidateDomain) {
-          const businessDomain = business.website ? domainOf(business.website) : null;
-          if (businessDomain && businessDomain === candidateDomain) return true;
-        }
-        if (candidateName.length >= 4 && business.name && normalizeName(business.name) === candidateName) return true;
-        if (businessHasEmail(business, candidate.email)) return true;
-        return false;
-      }) ?? null
-    );
-  } catch (error) {
-    logger.warn(`[API /businesses/manual] Duplicate check skipped: ${getErrorMessage(error)}`);
-    return null;
-  }
+function dedupeKeyFor(name: string, website: string | null): string {
+  const domain = website ? domainOf(website) : null;
+  return domain ? `d:${domain}` : `n:${normalizeName(name)}`;
 }
-
-/**
- * Merges user-provided signals from the notes box into the enrichment
- * result AFTER the website crawl, so anything the user verified manually
- * (socials, booking, email) is scored by the audit even if the crawl
- * missed it. Crawl findings are never overwritten.
- * (Implementation lives in notesParser.ts so the /api/audit pipeline can
- * apply the exact same merge to prospect notes.)
- */
 
 export async function POST(request: NextRequest) {
   try {
-    const rateLimitResponse = rateLimit(request, { intervalMs: 60000, maxRequests: 5 });
+    // Generous: the operator may queue many businesses in a row.
+    const rateLimitResponse = rateLimit(request, { intervalMs: 60_000, maxRequests: 20 });
     if (rateLimitResponse) return rateLimitResponse;
 
-    const body = await request.json();
-    const parsed = ManualBusinessSchema.safeParse(body);
+    const formData = await request.formData().catch(() => null);
+    const googleFile = formData?.get("google");
+    const facebookFile = formData?.get("facebook");
 
-    if (!parsed.success) {
-      logger.warn("[API /businesses/manual] Invalid request data:", parsed.error.issues);
+    if (!(googleFile instanceof File)) {
       return NextResponse.json(
-        { error: "Invalid request data", details: parsed.error.issues },
+        { error: "Add a screenshot of the Google Business Profile first." },
+        { status: 400 }
+      );
+    }
+    if (!(facebookFile instanceof File)) {
+      return NextResponse.json(
+        {
+          error:
+            "Add a screenshot of the Facebook page's About section too — that is where the email address usually is.",
+        },
         { status: 400 }
       );
     }
 
-    const d = parsed.data;
-    const id = randomUUID();
-    const notesItem = d.notes ? parseBusinessNotes(d.notes) : null;
-    // A website pasted in the notes can still feed the crawl if the field was empty
-    const website = normalizeWebsite(d.website) ?? notesItem?.website ?? null;
+    // Both images are read at the same time, so the wait is ~6-8s instead of
+    // the sum of two calls.
+    const [google, facebook] = await Promise.all([
+      extractFromScreenshot("google", googleFile),
+      extractFromScreenshot("facebook", facebookFile),
+    ]);
 
-    // 1b. Duplicate guard — block accidental re-creation of a business that
-    // already exists (and may already have been emailed). The client can
-    // retry with force:true after the user explicitly confirms.
-    if (!d.force) {
-      const duplicate = await findDuplicateBusiness({
-        name: d.name,
-        website,
-        email: d.email?.toLowerCase() ?? null,
-      });
-      if (duplicate) {
-        const existingProspect = await prospectPersistenceService.getProspectByBusinessId(duplicate.id);
-        let emailCount = 0;
-        let lastEmailSentAt: string | null = null;
-        if (existingProspect) {
-          const sentHistory = (await outreachPersistenceService.getOutreachHistory(existingProspect.id)).filter(
-            (record) => record.status === "SENT"
-          );
-          emailCount = sentHistory.length;
-          lastEmailSentAt = sentHistory.map((record) => record.sentAt).sort().at(-1) ?? null;
-        }
-        logger.info(`[API /businesses/manual] Duplicate blocked for "${d.name}" (existing business ${duplicate.id}).`);
-        return NextResponse.json(
-          {
-            duplicate: true,
-            match: {
-              businessId: duplicate.id,
-              name: duplicate.name,
-              prospectId: existingProspect?.id ?? null,
-              emailCount,
-              lastEmailSentAt,
-              suppressed: existingProspect?.isSuppressed ?? false,
-            },
-          },
-          { status: 409 }
-        );
-      }
+    // Google wins where both have a value (it is the canonical listing);
+    // Facebook fills the gaps — above all the email address.
+    const name = cleanValue(google.name) ?? cleanValue(facebook.name);
+    if (!name) {
+      return NextResponse.json(
+        {
+          error:
+            "The business name could not be read from either screenshot. Take the Google screenshot again with the business name clearly visible.",
+        },
+        { status: 422 }
+      );
     }
 
-    const hasLocationPart = Boolean(d.address || d.city || d.state || d.zip || d.country);
+    const website = normalizeWebsite(cleanValue(google.website) ?? cleanValue(facebook.website));
+    const phone = cleanValue(google.phone) ?? cleanValue(facebook.phone);
+    const address = cleanValue(google.address) ?? cleanValue(facebook.address);
+    const category = cleanValue(google.category) ?? cleanValue(facebook.category);
+    const email = (cleanValue(facebook.email) ?? cleanValue(google.email))?.toLowerCase() ?? null;
+    const rating = google.rating ?? facebook.rating ?? null;
+    const reviewCount = google.reviewCount ?? facebook.reviewCount ?? null;
+
+    // 1. Duplicate check — one lookup, no collection scan.
+    const dedupeKey = dedupeKeyFor(name, website);
+    const existing = await findExistingBusiness(dedupeKey);
+
+    if (existing) {
+      const existingProspect = await prospectPersistenceService.getProspectByBusinessId(existing.id);
+      logger.info(`[API /businesses/manual] Duplicate blocked: "${name}" (${existing.id}).`);
+
+      return NextResponse.json(
+        {
+          duplicate: true,
+          error: `"${existing.name}" is already in your app, so nothing was queued. Open it from the pipeline if you want to continue with it.`,
+          match: {
+            businessId: existing.id,
+            name: existing.name,
+            prospectId: existingProspect?.id ?? null,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
+    // 2. Save the business with everything the screenshots told us.
+    const id = randomUUID();
 
     const business: Business = {
       id,
-      name: d.name,
-      phone: d.phone || notesItem?.phone || undefined,
-      website: website || undefined,
-      location: hasLocationPart
-        ? {
-            address: d.address || undefined,
-            city: d.city || undefined,
-            state: d.state || undefined,
-            zip: d.zip || undefined,
-            country: d.country || undefined,
-          }
-        : undefined,
-      rating: d.rating ?? undefined,
-      reviewCount: d.reviewCount ?? undefined,
-      categories: d.category ? [d.category] : [],
+      name,
+      phone: phone ?? undefined,
+      website: website ?? undefined,
+      location: address ? { address } : undefined,
+      rating: rating ?? undefined,
+      reviewCount: reviewCount ?? undefined,
+      categories: category ? [category] : [],
       providerIds: { manual: id },
       status: "active",
       sources: ["MANUAL"],
-      // Raw notes are stored so the AI report prompt can quote them as
-      // owner-verified context.
-      notes: d.notes || undefined,
-      enrichment: d.email
+      notes: buildNotes(facebook),
+      dedupeKey,
+      enrichment: email
         ? {
             status: "NOT_STARTED",
             emails: [
               {
-                address: d.email,
+                address: email,
                 type: "BUSINESS" as const,
-                sourceUrl: "user provided",
+                sourceUrl: "facebook about screenshot",
                 sourceType: "VISIBLE_TEXT" as const,
                 confidence: 100,
               },
             ],
-            preferredEmail: d.email,
+            preferredEmail: email,
           }
         : undefined,
     };
 
-    // 1. Persist the manually entered business
     await persistenceService.upsertBusiness(business);
 
-    // 2. Run enrichment (crawls the website when one was provided), then merge
-    //    the user-verified signals on top of the crawl data. enrichBusiness
-    //    builds a fresh enrichment object from the crawl, so the email typed
-    //    in the dedicated Email field must be re-applied here — otherwise it
-    //    is lost before the prospect (and its Contact Email) is created.
-    const enrichmentData = await enrichmentService.enrichBusiness(business);
-    const userEmail = d.email ? d.email.toLowerCase() : null;
-    const parsedFromNotes = notesItem ?? {
-      socialProfiles: [],
-      booking: null,
-      emails: [],
-      phone: null,
-      website: null,
-      mentionsContactForm: false,
-      location: null,
-    };
-    const parsedWithUserEmail = userEmail
-      ? {
-          ...parsedFromNotes,
-          emails: [
-            {
-              address: userEmail,
-              type: "BUSINESS" as const,
-              sourceUrl: "user provided",
-              sourceType: "VISIBLE_TEXT" as const,
-              confidence: 100,
-            },
-            ...parsedFromNotes.emails.filter((e) => e.address !== userEmail),
-          ],
-        }
-      : parsedFromNotes;
-    const mergedEnrichment = mergeNotesIntoEnrichment(enrichmentData, parsedWithUserEmail);
-    // The explicitly typed address outranks anything the crawl guessed.
-    if (userEmail) {
-      mergedEnrichment.preferredEmail = userEmail;
-    }
-    await persistenceService.updateEnrichmentData(id, mergedEnrichment);
-    let enrichedBusiness: Business = { ...business, enrichment: mergedEnrichment };
+    // 3. Hand the slow part to the worker.
+    const job = await jobQueueService.enqueue({ businessId: id, businessName: name });
 
-    // 2b. Behind the scenes: fill in what the Google Business Profile
-    // screenshot left blank (postal address, contact email) from the website
-    // audit the user pasted into the notes box. Nothing is shown in the UI and
-    // nothing already set is overwritten; the audit, the AI report and the
-    // outreach email all read this same profile.
-    enrichedBusiness = await applyWebsiteAuditBackfill(
-      id,
-      enrichedBusiness,
-      parsedWithUserEmail
-    );
-
-    // 3. Run the deterministic audit + AI report
-    const auditResult = await auditEngine.runAudit(enrichedBusiness);
-    const auditRecord = await auditPersistenceService.saveAudit(id, auditResult);
-    if (!auditRecord) {
-      throw new Error("Audit record could not be saved.");
-    }
-
-    let aiReport = null;
-    let aiWarning: string | null = null;
-    try {
-      aiReport = await aiReportService.generateAuditReport(enrichedBusiness, auditResult);
-      await auditPersistenceService.saveAIReport(auditRecord.id, aiReport);
-    } catch (aiError: unknown) {
-      const message = aiError instanceof Error ? aiError.message : String(aiError);
-      logger.error(`[API /businesses/manual] AI report failed for ${id}: ${message}`);
-      aiWarning = `AI report generation failed: ${message}. The business and deterministic audit were created — you can Re-run Audit later.`;
-    }
-
-    // 4. Recalculate opportunity priority from the fresh audit
-    await priorityService.recalculatePriorityForBusiness(id);
-
-    // 5. Straight into the pipeline.
-    // Creating the business from a screenshot already means "I want to work
-    // this lead", so an extra "Add to pipeline" click afterwards is busywork.
-    // Duplicates never reach this point — they are answered with a 409 above,
-    // and the user has to confirm "Create duplicate anyway" first.
-    let prospectId: string | null = null;
-    let pipelineWarning: string | null = null;
-
-    try {
-      const contactEmail = pickBestEmailForBusiness(enrichedBusiness);
-      const opportunityScore = opportunityService.calculateScore(enrichedBusiness);
-      const prospect = await prospectPersistenceService.createProspect(
-        id,
-        contactEmail,
-        opportunityScore,
-        enrichedBusiness
-      );
-
-      if (prospect) {
-        prospectId = prospect.id;
-        // The priority pass above ran before the prospect existed, so score it
-        // now — the pipeline sorts on this.
-        await priorityService.recalculatePriorityForProspect(prospect.id);
-
-        await notificationService.notify({
-          type: "PROSPECT_ADDED",
-          title: `New prospect: ${enrichedBusiness.name}`,
-          body: contactEmail
-            ? `Added to the pipeline · ${contactEmail}`
-            : "Added to the pipeline — no contact email detected yet",
-          href: `/dashboard/pipeline/${prospect.id}`,
-          prospectId: prospect.id,
+    if (!job) {
+      return NextResponse.json(
+        {
+          error:
+            "The business was saved, but it could not be added to the queue. Please try adding it again.",
           businessId: id,
-          dedupeKey: `prospect-added:${prospect.id}`,
-        });
-      } else {
-        pipelineWarning =
-          "The business and its audit were saved, but it could not be added to the pipeline automatically. Use \"Add to Pipeline\" below.";
-      }
-    } catch (pipelineError) {
-      logger.error(
-        `[API /businesses/manual] Could not add ${id} to the pipeline: ${getErrorMessage(pipelineError)}`
+        },
+        { status: 500 }
       );
-      pipelineWarning =
-        "The business and its audit were saved, but it could not be added to the pipeline automatically. Use \"Add to Pipeline\" below.";
     }
 
-    logger.info(`[API /businesses/manual] Created ${d.name} (${id}) from manual input.`);
+    logger.info(`[API /businesses/manual] Queued "${name}" (${id}) as job ${job.id}.`);
 
     return NextResponse.json({
+      queued: true,
+      jobId: job.id,
       businessId: id,
-      business: enrichedBusiness,
-      audit: auditResult,
-      aiReport,
-      warning: aiWarning,
-      prospectId,
-      pipelineWarning,
+      businessName: name,
+      emailFound: Boolean(email),
+      hasWebsite: Boolean(website),
     });
   } catch (error) {
-    logger.error("[API /businesses/manual] Manual business creation failed:", getErrorMessage(error));
+    if (error instanceof ScreenshotError) {
+      return NextResponse.json({ error: error.userMessage }, { status: error.status });
+    }
+
+    logger.error("[API /businesses/manual] Ingest failed:", getErrorMessage(error));
     return NextResponse.json(
-      { error: "Failed to create business and run the audit." },
+      { error: "Something went wrong while reading the screenshots. Please try again." },
       { status: 500 }
     );
   }
+}
+
+async function findExistingBusiness(dedupeKey: string): Promise<Business | null> {
+  try {
+    const collection = await getBusinessesCollection();
+    const doc = await collection.findOne({ dedupeKey });
+    return (doc as unknown as Business) ?? null;
+  } catch (error) {
+    // Fail open: a lookup problem must not block the operator from adding work.
+    logger.warn(`[API /businesses/manual] Duplicate lookup skipped: ${getErrorMessage(error)}`);
+    return null;
+  }
+}
+
+/** The Facebook extras feed the audit — services and hours are real signals. */
+function buildNotes(facebook: {
+  services?: string[] | null;
+  hours?: string | null;
+}): string | undefined {
+  const lines: string[] = [];
+
+  const services = (facebook.services ?? []).map((s) => s.trim()).filter(Boolean);
+  if (services.length > 0) lines.push(`Services (from Facebook): ${services.join(", ")}`);
+  if (facebook.hours) lines.push(`Hours (from Facebook): ${facebook.hours}`);
+
+  return lines.length > 0 ? lines.join("\n") : undefined;
 }

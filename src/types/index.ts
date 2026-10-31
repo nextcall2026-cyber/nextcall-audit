@@ -132,6 +132,13 @@ export interface Business {
   // --- NEW: MODULE 13 FIELDS ---
   sourceProviders?: DiscoveryProviderName[];
   discoverySignals?: DiscoveryQualitySignals;
+
+  /**
+   * Cheap duplicate-detection key: "d:<domain>" when the business has a
+   * website, otherwise "n:<squashed name>". Lets the ingest step check for an
+   * existing record with one lookup instead of scanning the collection.
+   */
+  dedupeKey?: string;
 }
 
 // --- AUDIT ENGINE TYPES (MODULE 4) ---
@@ -430,6 +437,48 @@ export interface FollowUpDraft {
   stage: OutreachStage; 
   ctaType: CTAType; 
   angle: string; 
+}
+
+// ==========================================
+// JOB QUEUE (background workers)
+// ==========================================
+
+/** What a queued job has to do. Only audits exist today. */
+export type AuditJobStage = 'AUDIT';
+
+export type AuditJobStatus =
+  /** Waiting for a worker. */
+  | 'QUEUED'
+  /** A worker holds the lease right now. */
+  | 'RUNNING'
+  /** Finished successfully. */
+  | 'DONE'
+  /** Failed but will be retried after a backoff. */
+  | 'FAILED'
+  /** Out of retries — stays visible so the operator can re-queue it. */
+  | 'DEAD';
+
+export interface AuditJob {
+  id: string;
+  businessId: string;
+  /** Shown in the queue panel without a second database read. */
+  businessName: string;
+  stage: AuditJobStage;
+  status: AuditJobStatus;
+  attempts: number;
+  maxAttempts: number;
+  /** Worker instance holding the lease (e.g. "audit-1730000000"). */
+  workerId: string | null;
+  /** Heartbeat timestamp; a stale lease is reclaimed by another worker. */
+  lockedAt: string | null;
+  /** Earliest time a worker may pick this up (retry backoff). */
+  nextAttemptAt: string;
+  /** Plain-English reason the last attempt failed — shown in the UI. */
+  lastError: string | null;
+  lastErrorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
 }
 
 // ==========================================
