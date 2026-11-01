@@ -68,6 +68,18 @@ Rules:
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
+/**
+ * How long the primary chain gets on its own before the other vision chain is
+ * asked as well.
+ *
+ * Measured on production: auto:vision-social answers a screenshot in ~1.5-7s
+ * while auto:vision-listing can take 40-95s. Waiting out the slow one costs the
+ * operator a minute per business, so after a few seconds we simply ask the
+ * other chain too and take whichever answers first. In the normal case the
+ * primary wins inside the head start and the second call never happens.
+ */
+const HEDGE_DELAY_MS = 6_000;
+
 export class ScreenshotError extends Error {
   readonly userMessage: string;
   readonly status: number;
@@ -80,10 +92,78 @@ export class ScreenshotError extends Error {
   }
 }
 
+/** Both vision chains, in the order to try them for this screenshot type. */
+function chainsFor(kind: ScreenshotKind): [string, string] {
+  return kind === "google"
+    ? [AI_CHAINS.visionListing, AI_CHAINS.visionSocial]
+    : [AI_CHAINS.visionSocial, AI_CHAINS.visionListing];
+}
+
+/** One read. Returns null when the reply was not usable JSON; throws on failure. */
+async function readOnce(
+  kind: ScreenshotKind,
+  bytes: Buffer,
+  mimeType: string,
+  model: string,
+  timeoutMs: number
+): Promise<ExtractedScreenshotFields | null> {
+  const label = kind === "google" ? "Google Business Profile" : "Facebook About";
+
+  const llm = await generateLLMResponse({
+    system: kind === "google" ? GOOGLE_PROMPT : FACEBOOK_PROMPT,
+    user: `Extract the business details from this ${label} screenshot. If a field is not visible, return null for it.`,
+    images: [{ mimeType, data: bytes.toString("base64") }],
+    temperature: 0,
+    maxOutputTokens: 1200,
+    json: true,
+    thinking: "off",
+    model,
+    timeoutMs,
+    // The upload has a hard time budget: the gateway's extra 2s-delayed retry
+    // would turn one timeout into two and blow the request.
+    singleAttempt: true,
+  });
+
+  if (!llm.text) return null;
+
+  try {
+    const result = ExtractedSchema.safeParse(JSON.parse(llm.text));
+    if (result.success) return result.data;
+    logger.warn(`[ScreenshotExtractor] ${label}: reply did not match the schema.`);
+  } catch {
+    logger.warn(`[ScreenshotExtractor] ${label}: unreadable JSON.`);
+  }
+  return null;
+}
+
+/** Resolves with the first non-null value; null only when every input is null. */
+function firstSuccess<T>(promises: Array<Promise<T | null>>): Promise<T | null> {
+  return new Promise((resolve) => {
+    let pending = promises.length;
+    let settled = false;
+
+    const finish = (value: T | null) => {
+      pending -= 1;
+      if (settled) return;
+      if (value) {
+        settled = true;
+        resolve(value);
+      } else if (pending === 0) {
+        settled = true;
+        resolve(null);
+      }
+    };
+
+    for (const promise of promises) {
+      promise.then(finish).catch(() => finish(null));
+    }
+  });
+}
+
 export async function extractFromScreenshot(
   kind: ScreenshotKind,
   file: File,
-  options: { timeoutMs?: number; attempts?: number } = {}
+  options: { timeoutMs?: number } = {}
 ): Promise<ExtractedScreenshotFields> {
   if (!file.type.startsWith("image/")) {
     throw new ScreenshotError("One of the uploaded files is not an image. Use PNG, JPG or WEBP.", 400);
@@ -94,47 +174,35 @@ export async function extractFromScreenshot(
 
   const bytes = Buffer.from(await file.arrayBuffer());
   const label = kind === "google" ? "Google Business Profile" : "Facebook About";
-  const attempts = Math.max(1, options.attempts ?? 2);
+  const budget = options.timeoutMs ?? 30_000;
+  const [primaryChain, backupChain] = chainsFor(kind);
 
-  let parsed: ExtractedScreenshotFields | null = null;
   let lastError: unknown = null;
-
-  for (let attempt = 1; attempt <= attempts && !parsed; attempt++) {
-    try {
-      const llm = await generateLLMResponse({
-        system: kind === "google" ? GOOGLE_PROMPT : FACEBOOK_PROMPT,
-        user: `Extract the business details from this ${label} screenshot. If a field is not visible, return null for it.`,
-        images: [{ mimeType: file.type, data: bytes.toString("base64") }],
-        temperature: 0,
-        maxOutputTokens: 1200,
-        json: true,
-        thinking: "off",
-        // Each screenshot type has its own chain, so a slow Google read never
-        // holds up the Facebook one and neither competes for the same quota.
-        model: kind === "google" ? AI_CHAINS.visionListing : AI_CHAINS.visionSocial,
-        timeoutMs: options.timeoutMs,
-        // The upload has a hard time budget: the gateway's extra 2s-delayed
-        // retry would turn one 25s timeout into 52s and blow the request.
-        singleAttempt: true,
-      });
-
-      if (!llm.text) break;
-
-      try {
-        const result = ExtractedSchema.safeParse(JSON.parse(llm.text));
-        if (result.success) parsed = result.data;
-      } catch {
-        logger.warn(`[ScreenshotExtractor] ${label}: unreadable JSON on attempt ${attempt}.`);
-      }
-    } catch (error) {
+  const run = (model: string, timeoutMs: number) =>
+    readOnce(kind, bytes, file.type, model, timeoutMs).catch((error) => {
       lastError = error;
       logger.warn(
-        `[ScreenshotExtractor] ${label}: attempt ${attempt} failed — ${
+        `[ScreenshotExtractor] ${label} via ${model} failed — ${
           error instanceof Error ? error.message : String(error)
         }`
       );
-    }
-  }
+      return null;
+    });
+
+  // The primary gets a head start. If it is still thinking when the timer
+  // fires, the other vision chain is asked as well — whichever answers first
+  // wins. `done` stops the second call when the first one was quick.
+  let done = false;
+  const primaryRun = run(primaryChain, budget);
+  const backupRun = new Promise<ExtractedScreenshotFields | null>((resolve) => {
+    setTimeout(() => {
+      if (done) resolve(null);
+      else void run(backupChain, Math.max(10_000, budget - HEDGE_DELAY_MS)).then(resolve);
+    }, HEDGE_DELAY_MS);
+  });
+
+  const parsed = await firstSuccess([primaryRun, backupRun]);
+  done = true;
 
   if (!parsed) {
     throw new ScreenshotError(describeFailure(label, lastError));
@@ -152,12 +220,16 @@ export async function extractFromScreenshot(
  */
 function describeFailure(label: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  const slow = /no response|timed out|timeout|aborted|within \d+ms|fetch failed|ECONNRESET/i.test(
-    message
-  );
+  // Everything in here means "the reader could not answer right now", not
+  // "your screenshot is bad". A timeout, a sleeping/starting server, a
+  // provider parked by the circuit breaker — all the same advice: retry.
+  const temporary =
+    /no response|timed out|timeout|aborted|within \d+ms|fetch failed|ECONNRESET|cooling down|skipped|all llm providers failed|unavailable|503|502|504/i.test(
+      message
+    );
 
-  if (slow) {
-    return `The image reader did not respond in time, so the ${label} screenshot was not read. This is usually a temporary slowdown — wait a few seconds and press "Add to queue" again. The screenshot itself is fine.`;
+  if (temporary) {
+    return `The image reader did not respond in time, so the ${label} screenshot was not read. This is a temporary slowdown on the AI side — wait a few seconds and press "Add to queue" again. The screenshot itself is fine.`;
   }
 
   return `The ${label} screenshot could not be read. Take a clearer screenshot (make sure the business name and contact details are visible) and try again.`;

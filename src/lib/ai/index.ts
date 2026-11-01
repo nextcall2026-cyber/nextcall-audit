@@ -114,7 +114,12 @@ export async function generateLLMResponse(req: LLMRequest): Promise<LLMResponse>
   for (let index = 0; index < providerChain.length; index++) {
     const provider = providerChain[index];
 
-    if (!breaker.canAttempt(provider.id)) {
+    // With a single provider, "skipping" it means failing outright — which is
+    // worse than paying one attempt. The caller's timeout bounds the wait, so
+    // a parked breaker is ignored when there is nothing to fall back to.
+    const onlyProvider = providerChain.length === 1;
+
+    if (!onlyProvider && !breaker.canAttempt(provider.id)) {
       const remainingSec = Math.round(breaker.cooldownRemainingMs(provider.id) / 1000);
       failures.push(`${provider.label}: skipped (cooling down for ~${remainingSec}s after a previous failure)`);
       continue;

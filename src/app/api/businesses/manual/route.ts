@@ -95,11 +95,10 @@ export async function POST(request: NextRequest) {
     const [googleSettled, facebookSettled] = await Promise.allSettled([
       // 40s: a warm-but-busy chain needs more than the 25s the optional read
       // gets, and this is the one image the business cannot be built without.
-      extractFromScreenshot("google", googleFile, { timeoutMs: 40_000, attempts: 1 }),
+      extractFromScreenshot("google", googleFile, { timeoutMs: 40_000 }),
       facebookProvided
         ? extractFromScreenshot("facebook", facebookFile as File, {
             timeoutMs: 25_000,
-            attempts: 1,
           })
         : Promise.resolve(null),
     ]);
