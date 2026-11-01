@@ -79,7 +79,7 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
  * other chain too and take whichever answers first. In the normal case the
  * primary wins inside the head start and the second call never happens.
  */
-const HEDGE_DELAY_MS = 6_000;
+const HEDGE_DELAY_MS = 4_000;
 
 /**
  * Rate limits are worth waiting out: the router reports exactly when its
@@ -293,7 +293,7 @@ function describeFailure(label: string, error: unknown): string {
     );
 
   if (temporary) {
-    return `The image reader did not respond in time, so the ${label} screenshot was not read. This is a temporary slowdown on the AI side — wait a few seconds and press "Add to queue" again. The screenshot itself is fine.`;
+    return `The AI vision models did not answer in time, so the ${label} screenshot was not read. The screenshot itself is fine — this is the AI side. Wait a few seconds and press "Add to queue" again. If it keeps happening, open FreeLLMAPI and check the vision chains (auto:vision-listing / auto:vision-social): a model that accepts the request but never replies blocks the whole chain, so remove it or move a faster model to the top.`;
   }
 
   return `The ${label} screenshot could not be read. Take a clearer screenshot (make sure the business name and contact details are visible) and try again.`;

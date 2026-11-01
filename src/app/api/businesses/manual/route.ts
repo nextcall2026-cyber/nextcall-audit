@@ -93,12 +93,13 @@ export async function POST(request: NextRequest) {
     // Facebook is best-effort: if that chain is slow or down we still queue the
     // business, just without the email, instead of failing the whole ingest.
     const [googleSettled, facebookSettled] = await Promise.allSettled([
-      // 40s: a warm-but-busy chain needs more than the 25s the optional read
-      // gets, and this is the one image the business cannot be built without.
-      extractFromScreenshot("google", googleFile, { timeoutMs: 40_000 }),
+      // A healthy vision read takes 1.5-7s. Waiting longer only keeps the
+      // operator staring at a spinner when the chain is hanging — and a
+      // hanging chain never answers, so a big timeout buys nothing.
+      extractFromScreenshot("google", googleFile, { timeoutMs: 18_000 }),
       facebookProvided
         ? extractFromScreenshot("facebook", facebookFile as File, {
-            timeoutMs: 25_000,
+            timeoutMs: 12_000,
           })
         : Promise.resolve(null),
     ]);

@@ -94,7 +94,7 @@ describe("screenshot extraction", () => {
     mocks.generateLLMResponse.mockRejectedValue(new Error("No response from router within 40000ms"));
 
     const pending = extractFromScreenshot("google", screenshot(), { timeoutMs: 40_000 });
-    const assertion = expect(pending).rejects.toThrow(/temporary slowdown/i);
+    const assertion = expect(pending).rejects.toThrow(/did not answer in time/i);
     await vi.advanceTimersByTimeAsync(6_000);
 
     await assertion;
@@ -142,7 +142,9 @@ describe("screenshot extraction", () => {
     const result = await pending;
 
     expect(result.name).toBe("Answered after the wait");
-    expect(calls).toBe(2);
+    // At least the original call plus the retry after the rate limit. The hedge
+    // may add one more — that is fine, whichever answers first wins.
+    expect(calls).toBeGreaterThanOrEqual(2);
   });
 
   it("tells the operator the models are busy, not that the image is bad", async () => {
