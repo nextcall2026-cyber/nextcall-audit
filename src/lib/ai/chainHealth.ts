@@ -33,11 +33,20 @@ const memory = new Map<string, ChainMemory>();
 /**
  * Records how a chain behaved. `ok` means "the chain answered" — an unusable
  * reply is still an answer, so it must not be blamed on the chain's speed.
+ *
+ * `cooldownMs` overrides how long the chain is remembered as slow. A rate
+ * limit frees up in seconds, so parking that chain for ten minutes would be
+ * wrong; a chain that times out for real deserves the full window.
  */
-export function recordChainTiming(chain: string, durationMs: number, ok: boolean): void {
+export function recordChainTiming(
+  chain: string,
+  durationMs: number,
+  ok: boolean,
+  cooldownMs: number = MEMORY_MS
+): void {
   const slow = !ok || durationMs >= SLOW_MS;
   memory.set(chain, {
-    slowUntil: slow ? Date.now() + MEMORY_MS : 0,
+    slowUntil: slow ? Date.now() + cooldownMs : 0,
     lastDurationMs: durationMs,
     lastOk: ok,
     lastAt: Date.now(),

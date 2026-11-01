@@ -120,4 +120,43 @@ describe("screenshot extraction", () => {
     recordChainTiming(AI_CHAINS.visionListing, 2_000, true);
     expect(isChainSlow(AI_CHAINS.visionListing)).toBe(false);
   });
+
+  it("waits out a rate limit and retries instead of failing the upload", async () => {
+    vi.useFakeTimers();
+
+    let calls = 0;
+    mocks.generateLLMResponse.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) {
+        return Promise.reject(
+          new Error(
+            '429 Too Many Requests — {"error":{"message":"All models exhausted: 6 routes checked (5 rate-limited or on cooldown, 1 model lacks vision). Soonest reset ~4s."}}'
+          )
+        );
+      }
+      return Promise.resolve(reply({ name: "Answered after the wait" }));
+    });
+
+    const pending = extractFromScreenshot("google", screenshot(), { timeoutMs: 40_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await pending;
+
+    expect(result.name).toBe("Answered after the wait");
+    expect(calls).toBe(2);
+  });
+
+  it("tells the operator the models are busy, not that the image is bad", async () => {
+    vi.useFakeTimers();
+
+    mocks.generateLLMResponse.mockRejectedValue(
+      new Error('429 Too Many Requests — All models exhausted. Soonest reset ~2s.')
+    );
+
+    const pending = extractFromScreenshot("google", screenshot(), { timeoutMs: 40_000 });
+    const assertion = expect(pending).rejects.toThrow(/briefly busy/i);
+    // Two chains × two rate-limit retries of 2.5s each.
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    await assertion;
+  });
 });

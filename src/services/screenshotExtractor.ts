@@ -81,6 +81,25 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
  */
 const HEDGE_DELAY_MS = 6_000;
 
+/**
+ * Rate limits are worth waiting out: the router reports exactly when its
+ * routes free up ("Soonest reset ~4s"), and every model in the chain being
+ * briefly limited is a normal, self-clearing condition — not a reason to send
+ * the operator back to take another screenshot.
+ */
+const MAX_RATE_LIMIT_RETRIES = 2;
+const RATE_LIMIT_MEMORY_MS = 60_000;
+
+/** How long the router asked us to wait, in ms; null when it is not a 429. */
+function rateLimitWaitMs(error: unknown): number | null {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (!/429|rate.?limit|routing_exhausted|models exhausted/i.test(message)) return null;
+
+  const match = /reset\s*(?:~|in|after)?\s*(\d+(?:\.\d+)?)\s*s/i.exec(message);
+  const seconds = match ? Number(match[1]) : 5;
+  return Math.min(10_000, Math.max(1_000, Math.round(seconds * 1000) + 500));
+}
+
 export class ScreenshotError extends Error {
   readonly userMessage: string;
   readonly status: number;
@@ -189,21 +208,43 @@ export async function extractFromScreenshot(
   let lastError: unknown = null;
   const run = async (model: string, timeoutMs: number) => {
     const startedAt = Date.now();
-    try {
-      const fields = await readOnce(kind, bytes, file.type, model, timeoutMs);
-      // An unusable reply still means the chain answered — that is a content
-      // problem, not a slow chain.
-      recordChainTiming(model, Date.now() - startedAt, true);
-      return fields;
-    } catch (error) {
-      recordChainTiming(model, Date.now() - startedAt, false);
-      lastError = error;
-      logger.warn(
-        `[ScreenshotExtractor] ${label} via ${model} failed — ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      return null;
+    const deadline = startedAt + timeoutMs;
+
+    for (let attempt = 0; ; attempt++) {
+      const remaining = Math.max(5_000, deadline - Date.now());
+      try {
+        const fields = await readOnce(kind, bytes, file.type, model, remaining);
+        // An unusable reply still means the chain answered — that is a content
+        // problem, not a slow chain.
+        recordChainTiming(model, Date.now() - startedAt, true);
+        return fields;
+      } catch (error) {
+        lastError = error;
+        const waitMs = rateLimitWaitMs(error);
+
+        // A rate limit is not a broken chain: the router says when its routes
+        // free up ("Soonest reset ~4s"), so wait exactly that long and try
+        // again instead of failing the upload.
+        if (waitMs === null || attempt >= MAX_RATE_LIMIT_RETRIES || Date.now() + waitMs >= deadline) {
+          recordChainTiming(
+            model,
+            Date.now() - startedAt,
+            false,
+            waitMs === null ? undefined : RATE_LIMIT_MEMORY_MS
+          );
+          logger.warn(
+            `[ScreenshotExtractor] ${label} via ${model} failed — ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+          return null;
+        }
+
+        logger.warn(
+          `[ScreenshotExtractor] ${label} via ${model} is rate limited — retrying in ${waitMs}ms.`
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
     }
   };
 
@@ -238,6 +279,11 @@ export async function extractFromScreenshot(
  */
 function describeFailure(label: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
+
+  if (/429|rate.?limit|models exhausted|routing_exhausted/i.test(message)) {
+    return `All the AI models are briefly busy (free-tier rate limit), so the ${label} screenshot was not read. Wait about ten seconds and press "Add to queue" again — nothing is wrong with the screenshot.`;
+  }
+
   // Everything in here means "the reader could not answer right now", not
   // "your screenshot is bad". A timeout, a sleeping/starting server, a
   // provider parked by the circuit breaker — all the same advice: retry.
