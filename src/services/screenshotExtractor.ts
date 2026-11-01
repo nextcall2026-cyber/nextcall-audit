@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 import { generateLLMResponse } from "@/lib/ai";
 import { AI_CHAINS } from "@/lib/ai/chains";
+import { isChainSlow, recordChainTiming } from "@/lib/ai/chainHealth";
 import { logger } from "@/lib/logger";
 
 /**
@@ -94,9 +95,17 @@ export class ScreenshotError extends Error {
 
 /** Both vision chains, in the order to try them for this screenshot type. */
 function chainsFor(kind: ScreenshotKind): [string, string] {
-  return kind === "google"
-    ? [AI_CHAINS.visionListing, AI_CHAINS.visionSocial]
-    : [AI_CHAINS.visionSocial, AI_CHAINS.visionListing];
+  const [primary, backup] =
+    kind === "google"
+      ? [AI_CHAINS.visionListing, AI_CHAINS.visionSocial]
+      : [AI_CHAINS.visionSocial, AI_CHAINS.visionListing];
+
+  // If the leading chain was slow or failing within the last few minutes, lead
+  // with the other one instead. The hedge would rescue the read anyway, but
+  // this way a stuck chain costs nothing rather than a 6s head start per
+  // upload. When its memory expires it gets to lead again.
+  if (isChainSlow(primary) && !isChainSlow(backup)) return [backup, primary];
+  return [primary, backup];
 }
 
 /** One read. Returns null when the reply was not usable JSON; throws on failure. */
@@ -178,8 +187,16 @@ export async function extractFromScreenshot(
   const [primaryChain, backupChain] = chainsFor(kind);
 
   let lastError: unknown = null;
-  const run = (model: string, timeoutMs: number) =>
-    readOnce(kind, bytes, file.type, model, timeoutMs).catch((error) => {
+  const run = async (model: string, timeoutMs: number) => {
+    const startedAt = Date.now();
+    try {
+      const fields = await readOnce(kind, bytes, file.type, model, timeoutMs);
+      // An unusable reply still means the chain answered — that is a content
+      // problem, not a slow chain.
+      recordChainTiming(model, Date.now() - startedAt, true);
+      return fields;
+    } catch (error) {
+      recordChainTiming(model, Date.now() - startedAt, false);
       lastError = error;
       logger.warn(
         `[ScreenshotExtractor] ${label} via ${model} failed — ${
@@ -187,7 +204,8 @@ export async function extractFromScreenshot(
         }`
       );
       return null;
-    });
+    }
+  };
 
   // The primary gets a head start. If it is still thinking when the timer
   // fires, the other vision chain is asked as well — whichever answers first

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AI_CHAINS } from "@/lib/ai/chains";
+import { isChainSlow, recordChainTiming, resetChainHealth } from "@/lib/ai/chainHealth";
 import { extractFromScreenshot } from "@/services/screenshotExtractor";
 
 const mocks = vi.hoisted(() => ({
@@ -21,6 +22,7 @@ function reply(fields: Record<string, unknown>) {
 describe("screenshot extraction", () => {
   beforeEach(() => {
     mocks.generateLLMResponse.mockReset();
+    resetChainHealth();
   });
 
   afterEach(() => {
@@ -96,5 +98,26 @@ describe("screenshot extraction", () => {
     await vi.advanceTimersByTimeAsync(6_000);
 
     await assertion;
+  });
+
+  it("leads with the other chain once the usual one is known to be slow", async () => {
+    // auto:vision-listing took 40s last time — do not make the next upload pay
+    // the 6s head start again.
+    recordChainTiming(AI_CHAINS.visionListing, 40_000, false);
+    mocks.generateLLMResponse.mockResolvedValue(reply({ name: "Fast Co" }));
+
+    const result = await extractFromScreenshot("google", screenshot(), { timeoutMs: 5_000 });
+
+    expect(result.name).toBe("Fast Co");
+    expect(mocks.generateLLMResponse).toHaveBeenCalledTimes(1);
+    expect(mocks.generateLLMResponse.mock.calls[0][0].model).toBe(AI_CHAINS.visionSocial);
+  });
+
+  it("remembers a chain that answered, but too slowly", async () => {
+    recordChainTiming(AI_CHAINS.visionListing, 20_000, true);
+    expect(isChainSlow(AI_CHAINS.visionListing)).toBe(true);
+
+    recordChainTiming(AI_CHAINS.visionListing, 2_000, true);
+    expect(isChainSlow(AI_CHAINS.visionListing)).toBe(false);
   });
 });
