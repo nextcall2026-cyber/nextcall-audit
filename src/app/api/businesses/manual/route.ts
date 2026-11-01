@@ -10,6 +10,7 @@ import {
   ScreenshotError,
 } from "@/services/screenshotExtractor";
 import { jobQueueService } from "@/services/jobQueueService";
+import { warmRouterInBackground } from "@/lib/ai/warmup";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 import { getErrorMessage } from "@/lib/errors";
@@ -66,6 +67,10 @@ export async function POST(request: NextRequest) {
     const rateLimitResponse = rateLimit(request, { intervalMs: 60_000, maxRequests: 20 });
     if (rateLimitResponse) return rateLimitResponse;
 
+    // The router sleeps when idle and takes 60-95s to wake. Nudge it now so the
+    // next upload finds it awake; this one may still pay the cold start.
+    warmRouterInBackground();
+
     const formData = await request.formData().catch(() => null);
     const googleFile = formData?.get("google");
 
@@ -88,7 +93,9 @@ export async function POST(request: NextRequest) {
     // Facebook is best-effort: if that chain is slow or down we still queue the
     // business, just without the email, instead of failing the whole ingest.
     const [googleSettled, facebookSettled] = await Promise.allSettled([
-      extractFromScreenshot("google", googleFile, { timeoutMs: 25_000, attempts: 1 }),
+      // 40s: a warm-but-busy chain needs more than the 25s the optional read
+      // gets, and this is the one image the business cannot be built without.
+      extractFromScreenshot("google", googleFile, { timeoutMs: 40_000, attempts: 1 }),
       facebookProvided
         ? extractFromScreenshot("facebook", facebookFile as File, {
             timeoutMs: 25_000,
@@ -98,14 +105,13 @@ export async function POST(request: NextRequest) {
     ]);
 
     if (googleSettled.status === "rejected") {
-      const reason = googleSettled.reason;
-      if (reason instanceof ScreenshotError) throw reason;
-      throw new ScreenshotError(
-        "The Google screenshot could not be read in time. Please try again with a clearer screenshot."
+      logger.warn(
+        `[API /businesses/manual] Google read failed: ${getErrorMessage(googleSettled.reason)}`
       );
     }
 
-    const google = googleSettled.value;
+    const google = googleSettled.status === "fulfilled" ? googleSettled.value : null;
+    const googleFailed = googleSettled.status === "rejected";
     const facebook = facebookSettled.status === "fulfilled" ? facebookSettled.value : null;
     const facebookFailed = facebookSettled.status === "rejected";
 
@@ -119,24 +125,36 @@ export async function POST(request: NextRequest) {
 
     // Google wins where both have a value (it is the canonical listing);
     // Facebook fills the gaps — above all the email address.
-    const name = cleanValue(google.name) ?? cleanValue(facebook?.name);
+    const name = cleanValue(google?.name) ?? cleanValue(facebook?.name);
     if (!name) {
+      // Neither read produced a business name. If one of them already has a
+      // precise, actionable message (a timeout, an unreadable image), surface
+      // that instead of a generic one.
+      const failure =
+        googleSettled.status === "rejected"
+          ? googleSettled.reason
+          : facebookSettled.status === "rejected"
+            ? facebookSettled.reason
+            : null;
+
+      if (failure instanceof ScreenshotError) throw failure;
+
       return NextResponse.json(
         {
           error:
-            "The business name could not be read from either screenshot. Take the Google screenshot again with the business name clearly visible.",
+            "The business name could not be read from the screenshots. Take the Google screenshot again with the business name clearly visible.",
         },
         { status: 422 }
       );
     }
 
-    const website = normalizeWebsite(cleanValue(google.website) ?? cleanValue(facebook?.website));
-    const phone = cleanValue(google.phone) ?? cleanValue(facebook?.phone);
-    const address = cleanValue(google.address) ?? cleanValue(facebook?.address);
-    const category = cleanValue(google.category) ?? cleanValue(facebook?.category);
-    const email = (cleanValue(facebook?.email) ?? cleanValue(google.email))?.toLowerCase() ?? null;
-    const rating = google.rating ?? facebook?.rating ?? null;
-    const reviewCount = google.reviewCount ?? facebook?.reviewCount ?? null;
+    const website = normalizeWebsite(cleanValue(google?.website) ?? cleanValue(facebook?.website));
+    const phone = cleanValue(google?.phone) ?? cleanValue(facebook?.phone);
+    const address = cleanValue(google?.address) ?? cleanValue(facebook?.address);
+    const category = cleanValue(google?.category) ?? cleanValue(facebook?.category);
+    const email = (cleanValue(facebook?.email) ?? cleanValue(google?.email))?.toLowerCase() ?? null;
+    const rating = google?.rating ?? facebook?.rating ?? null;
+    const reviewCount = google?.reviewCount ?? facebook?.reviewCount ?? null;
 
     // 1. Duplicate check — one lookup, no collection scan.
     const dedupeKey = dedupeKeyFor(name, website);
@@ -222,12 +240,17 @@ export async function POST(request: NextRequest) {
       // False when no Facebook screenshot was supplied at all — the UI says so
       // instead of implying the page simply had no email.
       facebookUsed: Boolean(facebook),
-      ...(facebookFailed
+      ...(googleFailed
         ? {
             warning:
-              "The Facebook screenshot could not be read, so no email was found. The audit will still run.",
+              "The Google listing could not be read in time, so this audit was built from the Facebook page only — the rating and review count will be missing.",
           }
-        : {}),
+        : facebookFailed
+          ? {
+              warning:
+                "The Facebook screenshot could not be read, so no email was found. The audit will still run.",
+            }
+          : {}),
     });
   } catch (error) {
     if (error instanceof ScreenshotError) {

@@ -97,39 +97,70 @@ export async function extractFromScreenshot(
   const attempts = Math.max(1, options.attempts ?? 2);
 
   let parsed: ExtractedScreenshotFields | null = null;
+  let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= attempts && !parsed; attempt++) {
-    const llm = await generateLLMResponse({
-      system: kind === "google" ? GOOGLE_PROMPT : FACEBOOK_PROMPT,
-      user: `Extract the business details from this ${label} screenshot. If a field is not visible, return null for it.`,
-      images: [{ mimeType: file.type, data: bytes.toString("base64") }],
-      temperature: 0,
-      maxOutputTokens: 1200,
-      json: true,
-      thinking: "off",
-      // Each screenshot type has its own chain, so a slow Google read never
-      // holds up the Facebook one and neither competes for the same quota.
-      model: kind === "google" ? AI_CHAINS.visionListing : AI_CHAINS.visionSocial,
-      timeoutMs: options.timeoutMs,
-    });
-
-    if (!llm.text) break;
-
     try {
-      const result = ExtractedSchema.safeParse(JSON.parse(llm.text));
-      if (result.success) parsed = result.data;
-    } catch {
-      logger.warn(`[ScreenshotExtractor] ${label}: unreadable JSON on attempt ${attempt}.`);
+      const llm = await generateLLMResponse({
+        system: kind === "google" ? GOOGLE_PROMPT : FACEBOOK_PROMPT,
+        user: `Extract the business details from this ${label} screenshot. If a field is not visible, return null for it.`,
+        images: [{ mimeType: file.type, data: bytes.toString("base64") }],
+        temperature: 0,
+        maxOutputTokens: 1200,
+        json: true,
+        thinking: "off",
+        // Each screenshot type has its own chain, so a slow Google read never
+        // holds up the Facebook one and neither competes for the same quota.
+        model: kind === "google" ? AI_CHAINS.visionListing : AI_CHAINS.visionSocial,
+        timeoutMs: options.timeoutMs,
+        // The upload has a hard time budget: the gateway's extra 2s-delayed
+        // retry would turn one 25s timeout into 52s and blow the request.
+        singleAttempt: true,
+      });
+
+      if (!llm.text) break;
+
+      try {
+        const result = ExtractedSchema.safeParse(JSON.parse(llm.text));
+        if (result.success) parsed = result.data;
+      } catch {
+        logger.warn(`[ScreenshotExtractor] ${label}: unreadable JSON on attempt ${attempt}.`);
+      }
+    } catch (error) {
+      lastError = error;
+      logger.warn(
+        `[ScreenshotExtractor] ${label}: attempt ${attempt} failed — ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   }
 
   if (!parsed) {
-    throw new ScreenshotError(
-      `The ${label} screenshot could not be read. Take a clearer screenshot (make sure the business name and contact details are visible) and try again.`
-    );
+    throw new ScreenshotError(describeFailure(label, lastError));
   }
 
   return parsed;
+}
+
+/**
+ * Turns the raw failure into something the operator can act on.
+ *
+ * "Take a clearer screenshot" is the wrong advice when the image was fine and
+ * the image reader was simply still starting up — that is what a cold router
+ * looks like, and pressing the button again a few seconds later works.
+ */
+function describeFailure(label: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const slow = /no response|timed out|timeout|aborted|within \d+ms|fetch failed|ECONNRESET/i.test(
+    message
+  );
+
+  if (slow) {
+    return `The image reader did not respond in time, so the ${label} screenshot was not read. This is usually a temporary slowdown — wait a few seconds and press "Add to queue" again. The screenshot itself is fine.`;
+  }
+
+  return `The ${label} screenshot could not be read. Take a clearer screenshot (make sure the business name and contact details are visible) and try again.`;
 }
 
 /** Trims a value and turns blanks into null. */

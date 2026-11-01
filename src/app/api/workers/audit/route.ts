@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 import { authorizeSweep } from "@/lib/sweepAuth";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
+import { warmRouter } from "@/lib/ai/warmup";
 import { jobQueueService } from "@/services/jobQueueService";
 import { auditPipelineService, AuditPipelineError } from "@/services/auditPipelineService";
 import { notificationService } from "@/services/notificationService";
@@ -48,6 +49,13 @@ interface PassSummary {
 
 async function runPass(workerId: string): Promise<PassSummary> {
   const startedAt = Date.now();
+
+  // This pass runs every minute, which makes it the natural keep-alive for the
+  // router: a free Render instance sleeps after ~15 minutes idle and then takes
+  // 60-95s to answer, which is longer than an upload can wait. A cheap ping
+  // here means the operator's next screenshot is read in ~1.5s.
+  await warmRouter(8_000);
+
   const requeued = await jobQueueService.requeueStale();
 
   let done = 0;

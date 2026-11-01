@@ -79,6 +79,10 @@ async function attemptWithTransientRetry(provider: LLMProvider, req: LLMRequest)
 
     if (!RETRYABLE_KINDS.has(firstError.kind)) throw firstError;
 
+    // The caller asked for one attempt only (interactive budget), or the
+    // provider has no room for a second try.
+    if (req.singleAttempt) throw firstError;
+
     logger.warn(
       `[LLMGateway] ${provider.label} transient ${firstError.kind} failure — retrying once in ${TRANSIENT_RETRY_DELAY_MS}ms: ${firstError.message}`
     );

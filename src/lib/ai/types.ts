@@ -82,6 +82,15 @@ export interface LLMRequest {
    * reports need room), but interactive calls pass something much shorter.
    */
   timeoutMs?: number;
+  /**
+   * Skip the gateway's automatic second attempt on a transient failure.
+   *
+   * The gateway normally retries once after 2s, which is right for background
+   * work. It is wrong for an interactive call with a tight budget: two 25s
+   * timeouts cost the caller 52s and blow the request's time limit. Callers
+   * that do their own retry (or must answer fast) set this.
+   */
+  singleAttempt?: boolean;
 }
 
 export interface LLMResponse {
