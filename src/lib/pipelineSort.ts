@@ -1,4 +1,5 @@
 import { Prospect } from "@/types";
+import { isProspectUnread } from "@/lib/pipelineReadState";
 
 /**
  * The canonical pipeline list order — the single source of truth shared by
@@ -7,14 +8,14 @@ import { Prospect } from "@/types";
  * server fetch would put it.
  *
  * Order:
- *   1. Prospects whose audit was never opened ("New", viewAddedAt null) go
- *      to the very top — newest additions first.
- *   2. Opened ones sink to the bottom, ranked by priorityScore descending
+ *   1. Prospects that still need attention ("New" — never opened and never
+ *      emailed) go to the very top — newest additions first.
+ *   2. Everyone else sinks to the bottom, ranked by priorityScore descending
  *      (nulls last), newest first on ties.
  */
 export function compareProspectsForPipeline(a: Prospect, b: Prospect): number {
-  const aUnread = !a.viewAddedAt;
-  const bUnread = !b.viewAddedAt;
+  const aUnread = isProspectUnread(a);
+  const bUnread = isProspectUnread(b);
   if (aUnread !== bUnread) return aUnread ? -1 : 1;
 
   if (aUnread) {

@@ -136,6 +136,12 @@ async markAsSent(
       if (record) {
         // Update Prospect's lastContactedAt
         await prospectPersistenceService.updateLastContacted(record.prospectId, sentAt);
+
+        // A sent email means this audit has already been acted on, so it must
+        // stop showing as "New / unread" in the pipeline. Doing it here covers
+        // every send path at once: the manual button, the auto-send pass and
+        // the follow-up sequence.
+        await prospectPersistenceService.markAsReadAfterSend(record.prospectId);
         // Keep the pipeline stage in sync with outreach activity so the
         // Pipeline UI (CONTACTED / FOLLOW_UP sections) reflects real sends
         await prospectPersistenceService.advancePipelineStatusForContact(

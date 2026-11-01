@@ -68,7 +68,6 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData().catch(() => null);
     const googleFile = formData?.get("google");
-    const facebookFile = formData?.get("facebook");
 
     if (!(googleFile instanceof File)) {
       return NextResponse.json(
@@ -76,15 +75,13 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    if (!(facebookFile instanceof File)) {
-      return NextResponse.json(
-        {
-          error:
-            "Add a screenshot of the Facebook page's About section too — that is where the email address usually is.",
-        },
-        { status: 400 }
-      );
-    }
+
+    // The Facebook About panel is optional: plenty of businesses have no
+    // Facebook page at all. It is only the best place to find an email, not a
+    // requirement — without it the audit still runs and the website crawl gets
+    // a chance to find the address instead.
+    const facebookFile = formData?.get("facebook");
+    const facebookProvided = facebookFile instanceof File;
 
     // Both images are read at the same time, each with a hard cap.
     // Google is required — without a name there is nothing to audit.
@@ -92,7 +89,12 @@ export async function POST(request: NextRequest) {
     // business, just without the email, instead of failing the whole ingest.
     const [googleSettled, facebookSettled] = await Promise.allSettled([
       extractFromScreenshot("google", googleFile, { timeoutMs: 25_000, attempts: 1 }),
-      extractFromScreenshot("facebook", facebookFile, { timeoutMs: 25_000, attempts: 1 }),
+      facebookProvided
+        ? extractFromScreenshot("facebook", facebookFile as File, {
+            timeoutMs: 25_000,
+            attempts: 1,
+          })
+        : Promise.resolve(null),
     ]);
 
     if (googleSettled.status === "rejected") {
@@ -217,6 +219,9 @@ export async function POST(request: NextRequest) {
       businessName: name,
       emailFound: Boolean(email),
       hasWebsite: Boolean(website),
+      // False when no Facebook screenshot was supplied at all — the UI says so
+      // instead of implying the page simply had no email.
+      facebookUsed: Boolean(facebook),
       ...(facebookFailed
         ? {
             warning:

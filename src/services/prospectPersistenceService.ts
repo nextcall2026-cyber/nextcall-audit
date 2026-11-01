@@ -369,6 +369,33 @@ logger.error(`[ProspectPersistenceService] Failed to update contact email for ${
   }
 
   /**
+   * Marks a prospect read because its audit email has already gone out.
+   *
+   * Called from every send path (manual button, auto-send pass, follow-up),
+   * so the pipeline never keeps showing "New" on a business that was already
+   * contacted. `viewedCount` is deliberately untouched — nobody actually
+   * opened the prospect, so it must not inflate the engagement numbers.
+   */
+  async markAsReadAfterSend(id: string): Promise<void> {
+    try {
+      const collection = await getProspectsCollection();
+      const prospect = await collection.findOne({ id });
+      if (!prospect || prospect.viewAddedAt) return;
+
+      const now = new Date().toISOString();
+      await collection.updateOne({ id }, { $set: { viewAddedAt: now, updatedAt: now } });
+      logger.info(
+        `[ProspectPersistenceService] Marked prospect ${id} read — its email was already sent.`
+      );
+    } catch (error) {
+      logger.error(
+        `[ProspectPersistenceService] Failed to mark ${id} read after the send:`,
+        getErrorMessage(error)
+      );
+    }
+  }
+
+  /**
    * Marks a prospect read because the automation already handled it.
    *
    * When the AI writes and sends the audit email on its own, the operator has

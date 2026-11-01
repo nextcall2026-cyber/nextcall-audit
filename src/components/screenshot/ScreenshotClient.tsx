@@ -11,9 +11,10 @@ import { getErrorMessage } from "@/lib/errors";
 /**
  * Screenshot ingest + queue.
  *
- * The operator drops two screenshots (Google listing + Facebook About), presses
- * one button, and moves on to the next business. Everything after that happens
- * in the background — the audit worker picks the job up within a minute.
+ * The operator drops the Google listing screenshot (and the Facebook About one
+ * when the business has a page), presses one button, and moves on to the next
+ * business. Everything after that happens in the background — the audit worker
+ * picks the job up within a minute.
  *
  * Nothing here waits for the audit. The only slow part is reading the two
  * images (~6-8s), and that is what the button spinner covers.
@@ -50,8 +51,8 @@ const SLOT_META: Record<Slot, { title: string; hint: string }> = {
     hint: "The listing with the name, rating and phone number.",
   },
   facebook: {
-    title: "Facebook — About section",
-    hint: "The About / Intro panel. This is where the email address usually is.",
+    title: "Facebook — About section (optional)",
+    hint: "Skip it if the business has no Facebook page. This is where the email usually is.",
   },
 };
 
@@ -70,7 +71,11 @@ export default function ScreenshotClient() {
   const [previews, setPreviews] = useState<Record<Slot, string | null>>({ google: null, facebook: null });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastQueued, setLastQueued] = useState<{ name: string; emailFound: boolean } | null>(null);
+  const [lastQueued, setLastQueued] = useState<{
+    name: string;
+    emailFound: boolean;
+    facebookUsed: boolean;
+  } | null>(null);
 
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [stats, setStats] = useState<QueueStats>(EMPTY_STATS);
@@ -170,11 +175,13 @@ export default function ScreenshotClient() {
   }, [files.google]);
 
   // --- submit --------------------------------------------------------------
-  const bothReady = Boolean(files.google && files.facebook);
+  // Only the Google listing is required — plenty of businesses have no
+  // Facebook page, and refusing those would just lose a lead.
+  const googleReady = Boolean(files.google);
 
   const handleQueue = async () => {
-    if (!bothReady) {
-      setError("Both screenshots are needed — the Google listing and the Facebook About section.");
+    if (!googleReady) {
+      setError("Add the Google Business Profile screenshot first.");
       return;
     }
 
@@ -184,7 +191,7 @@ export default function ScreenshotClient() {
     try {
       const formData = new FormData();
       formData.append("google", files.google!);
-      formData.append("facebook", files.facebook!);
+      if (files.facebook) formData.append("facebook", files.facebook);
 
       const response = await fetch("/api/businesses/manual", { method: "POST", body: formData });
       const data = await response.json().catch(() => ({}));
@@ -203,7 +210,11 @@ export default function ScreenshotClient() {
         return;
       }
 
-      setLastQueued({ name: data.businessName, emailFound: Boolean(data.emailFound) });
+      setLastQueued({
+        name: data.businessName,
+        emailFound: Boolean(data.emailFound),
+        facebookUsed: Boolean(data.facebookUsed),
+      });
       if (data.warning) {
         toast.warning("Queued — but check the email", data.warning);
       } else {
@@ -240,9 +251,9 @@ export default function ScreenshotClient() {
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted-foreground">
-        Drop two screenshots per business — the Google listing and the Facebook About section — then
-        press <span className="font-medium text-foreground">Add to queue</span>. The audit runs in the
-        background, so you can keep adding businesses without waiting.
+        Drop the Google listing screenshot — plus the Facebook About section when the business has
+        one — then press <span className="font-medium text-foreground">Add to queue</span>. The audit
+        runs in the background, so you can keep adding businesses without waiting.
       </p>
 
       {/* Add a business */}
@@ -335,11 +346,16 @@ export default function ScreenshotClient() {
               <span>
                 is in the queue{lastQueued.emailFound ? " · email found" : " · no email found yet"}
               </span>
+              {!lastQueued.facebookUsed && (
+                <span className="text-emerald-700/80">
+                  · no Facebook screenshot, so the website will be searched for an email
+                </span>
+              )}
             </div>
           )}
 
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <Button onClick={handleQueue} disabled={submitting || !bothReady} className="gap-2">
+            <Button onClick={handleQueue} disabled={submitting || !googleReady} className="gap-2">
               {submitting ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -353,9 +369,11 @@ export default function ScreenshotClient() {
               )}
             </Button>
             <span className="text-xs text-muted-foreground">
-              {bothReady
-                ? "Both screenshots are ready."
-                : "Both screenshots are required before queueing."}
+              {!googleReady
+                ? "The Google screenshot is required before queueing."
+                : files.facebook
+                  ? "Both screenshots are ready."
+                  : "No Facebook screenshot — the audit will look for an email on the website instead."}
             </span>
           </div>
         </CardContent>

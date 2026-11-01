@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Trash2 } from "lucide-react";
 import { logger } from "@/lib/logger";
+import { hasBeenEmailed, isProspectUnread } from "@/lib/pipelineReadState";
 import Link from "next/link";
 
 import { getErrorMessage } from "@/lib/errors";
@@ -188,9 +189,9 @@ export default function PipelineClient() {
 
                 {displayedProspects.map((p) => {
                     const followUpStatus = getFollowUpStatus(p.nextFollowUpAt);
-                    const isUnread = !p.viewAddedAt;
+                    const isUnread = isProspectUnread(p);
                     const hasAudit = p.auditScore !== null;
-                    const wasEmailed = p.lastContactedAt !== null || p.outreachState !== "UNCONTACTED";
+                    const wasEmailed = hasBeenEmailed(p);
                     const outreachLabel = OUTREACH_STATE_LABELS[p.outreachState] ?? p.outreachState.replace(/_/g, " ").toLowerCase();
 
                     return (

@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { logger } from "@/lib/logger";
+import { hasBeenEmailed } from "@/lib/pipelineReadState";
 import { normalizeExternalUrl, isValidExternalUrl } from "@/lib/externalUrl";
 import Link from "next/link";
 import { ArrowLeft, ExternalLink } from "lucide-react";
@@ -811,7 +812,7 @@ export default function ProspectDetailClient({ prospectId }: { prospectId: strin
                             </div>
                             <div className="flex justify-between">
                                 <span className="text-gray-500">Viewed</span>
-                                <span className="font-medium">{prospect.viewAddedAt ? `✓ Viewed (${new Date(prospect.viewAddedAt).toLocaleDateString()})` : '● Unviewed'}</span>
+                                <span className="font-medium">{prospect.viewAddedAt ? `✓ Viewed (${new Date(prospect.viewAddedAt).toLocaleDateString()})` : hasBeenEmailed(prospect) ? '✓ Read — email already sent' : '● Unviewed'}</span>
                             </div>
                             {prospect.viewedCount !== undefined && (
                                 <div className="flex justify-between">
