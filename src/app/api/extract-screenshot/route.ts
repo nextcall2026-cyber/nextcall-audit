@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { generateLLMResponse } from "@/lib/ai";
-import { AI_CHAINS } from "@/lib/ai/chains";
+import { readWithVisionChain } from "@/lib/ai/visionChain";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rateLimiter";
 
@@ -56,15 +55,13 @@ export async function POST(request: NextRequest) {
     let parsed: z.infer<typeof ScreenshotExtractSchema> | null = null;
 
     for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
-      const llm = await generateLLMResponse({
+      const llm = await readWithVisionChain({
         system: SYSTEM_PROMPT,
         user: "Extract the business details from this screenshot. If a field is not visible, return null for it.",
-        images: [{ mimeType: file.type, data: bytes.toString("base64") }],
-        temperature: 0,
-        maxOutputTokens: 1000,
-        json: true,
-        thinking: "off",
-        model: AI_CHAINS.main,
+        imageBase64: bytes.toString("base64"),
+        mimeType: file.type,
+        timeoutMs: 60_000,
+        maxTokens: 2000,
       });
 
       const raw = llm.text;

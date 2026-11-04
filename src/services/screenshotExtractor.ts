@@ -1,8 +1,7 @@
 import "server-only";
 
 import { z } from "zod";
-import { generateLLMResponse } from "@/lib/ai";
-import { AI_CHAINS } from "@/lib/ai/chains";
+import { readWithVisionChain } from "@/lib/ai/visionChain";
 import { logger } from "@/lib/logger";
 
 /**
@@ -121,7 +120,20 @@ async function toImage(source: ScreenshotSource): Promise<{ bytes: Buffer; mimeT
   return { bytes: source.bytes, mimeType: source.mimeType };
 }
 
-/** One read. Returns null when the reply was not usable JSON; throws on failure. */
+/** Removes the markdown fences some models wrap their JSON answer in. */
+function stripFences(text: string): string {
+  const trimmed = (text ?? "").trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(trimmed);
+  return (fenced ? fenced[1] : trimmed).trim();
+}
+
+/**
+ * One read. Returns null when the reply was not usable JSON; throws on failure.
+ *
+ * The read goes through the vision chain (NVIDIA nemotron-VL first, then the
+ * reserved Grok slot, then the FreeLLMApi router) — NVIDIA proved 100% correct
+ * on real listing screenshots where browser OCR mangled fields.
+ */
 async function readOnce(
   kind: ScreenshotKind,
   bytes: Buffer,
@@ -130,25 +142,19 @@ async function readOnce(
 ): Promise<ExtractedScreenshotFields | null> {
   const label = kind === "google" ? "Google Business Profile" : "Facebook About";
 
-  const llm = await generateLLMResponse({
+  const llm = await readWithVisionChain({
     system: kind === "google" ? GOOGLE_PROMPT : FACEBOOK_PROMPT,
     user: `Extract the business details from this ${label} screenshot. If a field is not visible, return null for it.`,
-    images: [{ mimeType, data: bytes.toString("base64") }],
-    temperature: 0,
-    maxOutputTokens: 1200,
-    json: true,
-    thinking: "off",
-    model: AI_CHAINS.main,
+    imageBase64: bytes.toString("base64"),
+    mimeType,
     timeoutMs,
-    // The worker pass has a hard time budget: the gateway's extra 2s-delayed
-    // retry would turn one timeout into two and blow the budget.
-    singleAttempt: true,
+    maxTokens: 2000,
   });
 
-  if (!llm.text) return null;
+  logger.info(`[ScreenshotExtractor] ${label} read by ${llm.provider} (${llm.model}).`);
 
   try {
-    const result = ExtractedSchema.safeParse(JSON.parse(llm.text));
+    const result = ExtractedSchema.safeParse(JSON.parse(stripFences(llm.text)));
     if (result.success) return result.data;
     logger.warn(`[ScreenshotExtractor] ${label}: reply did not match the schema.`);
   } catch {
@@ -228,7 +234,7 @@ function describeFailure(label: string, error: unknown): string {
     );
 
   if (temporary) {
-    return `The AI vision model did not answer in time, so the ${label} screenshot was not read. The screenshot itself is fine — this is the AI side. The job will retry automatically. If it keeps happening, open FreeLLMAPI and check the chain (${AI_CHAINS.main}): a model that accepts the request but never replies blocks the whole chain, so remove it or move a faster model to the top.`;
+    return `The AI vision model did not answer in time, so the ${label} screenshot was not read. The screenshot itself is fine — this is the AI side. The job will retry automatically. If it keeps happening, check the vision chain in order: the NVIDIA endpoint (NVIDIA_BASE_URL/NVIDIA_ACCESS/NVIDIA_MODEL), the Grok slot (GROK_*), then the FreeLLMAPI router — a model that accepts the request but never replies blocks everything behind it.`;
   }
 
   return `The ${label} screenshot could not be read. Take a clearer screenshot (make sure the business name and contact details are visible) and add the business again.`;

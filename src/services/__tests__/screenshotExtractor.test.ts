@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { AI_CHAINS } from "@/lib/ai/chains";
 import {
   cleanValue,
   extractFromScreenshot,
@@ -7,19 +6,18 @@ import {
 } from "@/services/screenshotExtractor";
 
 const mocks = vi.hoisted(() => ({
-  generateLLMResponse: vi.fn(),
+  readWithVisionChain: vi.fn(),
 }));
 
-vi.mock("@/lib/ai", () => ({
-  generateLLMResponse: mocks.generateLLMResponse,
+vi.mock("@/lib/ai/visionChain", () => ({
+  readWithVisionChain: mocks.readWithVisionChain,
 }));
 
 function reply(fields: Record<string, unknown>) {
   return {
     text: JSON.stringify(fields),
-    provider: "free1",
-    model: "test",
-    fallback: false,
+    provider: "nvidia",
+    model: "test-vision",
   };
 }
 
@@ -28,7 +26,7 @@ function screenshot(): File {
 }
 
 beforeEach(() => {
-  mocks.generateLLMResponse.mockReset();
+  mocks.readWithVisionChain.mockReset();
 });
 
 afterEach(() => {
@@ -36,18 +34,22 @@ afterEach(() => {
 });
 
 describe("extractFromScreenshot", () => {
-  it("reads the business details through the single main chain", async () => {
-    mocks.generateLLMResponse.mockResolvedValue(reply({ name: "Acme" }));
+  it("reads the business details through the vision chain", async () => {
+    mocks.readWithVisionChain.mockResolvedValue(reply({ name: "Acme" }));
 
     const result = await extractFromScreenshot("google", screenshot(), { timeoutMs: 5_000 });
 
     expect(result.name).toBe("Acme");
-    expect(mocks.generateLLMResponse).toHaveBeenCalledTimes(1);
-    expect(mocks.generateLLMResponse.mock.calls[0][0].model).toBe(AI_CHAINS.main);
+    expect(mocks.readWithVisionChain).toHaveBeenCalledTimes(1);
+    const call = mocks.readWithVisionChain.mock.calls[0][0];
+    expect(call.imageBase64).toBeTruthy();
+    expect(call.mimeType).toBe("image/png");
   });
 
   it("accepts raw bytes stored by the ingest (worker path)", async () => {
-    mocks.generateLLMResponse.mockResolvedValue(reply({ name: "From stored bytes", email: "hi@acme.com" }));
+    mocks.readWithVisionChain.mockResolvedValue(
+      reply({ name: "From stored bytes", email: "hi@acme.com" })
+    );
 
     const result = await extractFromScreenshot(
       "facebook",
@@ -56,14 +58,25 @@ describe("extractFromScreenshot", () => {
     );
 
     expect(result.email).toBe("hi@acme.com");
-    const call = mocks.generateLLMResponse.mock.calls[0][0];
-    expect(call.images[0].mimeType).toBe("image/jpeg");
+    const call = mocks.readWithVisionChain.mock.calls[0][0];
+    expect(call.mimeType).toBe("image/jpeg");
+  });
+
+  it("strips markdown fences around the JSON answer", async () => {
+    mocks.readWithVisionChain.mockResolvedValue({
+      text: '```json\n{"name":"Fenced Co"}\n```',
+      provider: "nvidia",
+      model: "test-vision",
+    });
+
+    const result = await extractFromScreenshot("google", screenshot(), { timeoutMs: 5_000 });
+    expect(result.name).toBe("Fenced Co");
   });
 
   it("waits out a rate limit and retries the same chain", async () => {
     vi.useFakeTimers();
 
-    mocks.generateLLMResponse
+    mocks.readWithVisionChain
       .mockRejectedValueOnce(new Error("429 Too Many Requests — All models exhausted. Soonest reset ~2s."))
       .mockResolvedValueOnce(reply({ name: "Acme" }));
 
@@ -72,13 +85,13 @@ describe("extractFromScreenshot", () => {
     const result = await pending;
 
     expect(result.name).toBe("Acme");
-    expect(mocks.generateLLMResponse).toHaveBeenCalledTimes(2);
+    expect(mocks.readWithVisionChain).toHaveBeenCalledTimes(2);
   });
 
   it("throws the friendly message when every attempt is rate limited", async () => {
     vi.useFakeTimers();
 
-    mocks.generateLLMResponse.mockRejectedValue(
+    mocks.readWithVisionChain.mockRejectedValue(
       new Error("429 Too Many Requests — All models exhausted. Soonest reset ~2s.")
     );
 
@@ -87,7 +100,7 @@ describe("extractFromScreenshot", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await assertion;
 
-    expect(mocks.generateLLMResponse).toHaveBeenCalledTimes(3);
+    expect(mocks.readWithVisionChain).toHaveBeenCalledTimes(3);
   });
 
   it("rejects a non-image upload before any AI call", async () => {
@@ -97,7 +110,7 @@ describe("extractFromScreenshot", () => {
       })
     ).rejects.toThrow(/not an image/i);
 
-    expect(mocks.generateLLMResponse).not.toHaveBeenCalled();
+    expect(mocks.readWithVisionChain).not.toHaveBeenCalled();
   });
 });
 

@@ -495,20 +495,14 @@ export interface AuditJob {
   finishedAt: string | null;
 }
 
-/** One pasted screenshot stored at queue time; deleted after its text has been read. */
+/** One pasted screenshot stored at queue time; deleted after its vision read. */
 export interface ScreenshotUpload {
   id: string;
   kind: 'google' | 'facebook';
   mimeType: string;
-  /** Base64 of the image — kept only until the read (OCR or vision). */
+  /** Base64 of the image — kept only until the vision read completes. */
   dataBase64: string;
   bytes: number;
-  /**
-   * Raw text the operator's browser OCR pulled out of this screenshot at
-   * paste time. Present only when OCR succeeded; the AI vision read is then
-   * skipped entirely (the fields are parsed straight from this text).
-   */
-  ocrText?: string;
   createdAt: string;
 }
 

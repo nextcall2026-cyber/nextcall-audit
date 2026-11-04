@@ -63,16 +63,6 @@ export async function POST(request: NextRequest) {
     const googleId = randomUUID();
     const facebookId = facebookFile instanceof File ? randomUUID() : null;
 
-    // The operator's browser OCR text (best-effort, may be absent). Cap it —
-    // a screenshot of a listing is a couple of KB of text, anything longer is
-    // a misbehaving client.
-    const capOcr = (raw: FormDataEntryValue | null): string | undefined => {
-      const text = typeof raw === "string" ? raw.trim() : "";
-      return text ? (text.length > 20_000 ? text.slice(0, 20_000) : text) : undefined;
-    };
-    const googleOcrText = capOcr(formData?.get("googleOcr") ?? null);
-    const facebookOcrText = capOcr(formData?.get("facebookOcr") ?? null);
-
     const now = new Date().toISOString();
     const uploads: Array<{
       id: string;
@@ -80,7 +70,6 @@ export async function POST(request: NextRequest) {
       mimeType: string;
       dataBase64: string;
       bytes: number;
-      ocrText?: string;
       createdAt: string;
     }> = [
       {
@@ -89,7 +78,6 @@ export async function POST(request: NextRequest) {
         mimeType: googleFile.type,
         dataBase64: Buffer.from(await googleFile.arrayBuffer()).toString("base64"),
         bytes: googleFile.size,
-        ocrText: googleOcrText,
         createdAt: now,
       },
     ];
@@ -100,7 +88,6 @@ export async function POST(request: NextRequest) {
         mimeType: facebookFile.type,
         dataBase64: Buffer.from(await facebookFile.arrayBuffer()).toString("base64"),
         bytes: facebookFile.size,
-        ocrText: facebookOcrText,
         createdAt: now,
       });
     }

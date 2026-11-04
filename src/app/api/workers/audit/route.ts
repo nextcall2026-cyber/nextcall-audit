@@ -12,7 +12,6 @@ import {
   ScreenshotError,
   ScreenshotKind,
 } from "@/services/screenshotExtractor";
-import { parseGoogleListingText, parseFacebookListingText, ocrFieldsUsable } from "@/lib/ocrParsing";
 import { saveBusinessFromScreenshots } from "@/services/businessIngestService";
 import { getScreenshotUploadsCollection } from "@/lib/db";
 import { AuditJob, ScreenshotUpload } from "@/types";
@@ -239,9 +238,9 @@ export async function GET() {
 }
 
 /**
- * Screenshot-stage jobs: read the stored uploads — browser OCR first, AI
- * vision only as a fallback, both reads in parallel — then create the
- * business and stamp it on the job.
+ * Screenshot-stage jobs: read the stored uploads with the vision chain
+ * (NVIDIA first, then the Grok slot, then the FreeLLMApi router) — both reads
+ * in parallel — then create the business and stamp it on the job.
  *
  * Resumable by design: once the business is saved (and stamped on the job)
  * the uploads are deleted, so a retry skips straight to the pipeline instead
@@ -276,34 +275,10 @@ async function ensureBusinessFromScreenshots(
     );
   }
 
-  // Zero-AI read first: the browser OCR text that came with the upload. When
-  // it carries a believable name the vision call is skipped entirely — this
-  // is what keeps a slow or rate-limited AI chain from stalling the queue.
-  const googleOcr = google.ocrText ? parseGoogleListingText(google.ocrText) : null;
-  const facebookOcr = facebook?.ocrText ? parseFacebookListingText(facebook.ocrText) : null;
-
-  const googleOcrUsable = Boolean(googleOcr && ocrFieldsUsable(googleOcr));
-  const facebookOcrUsable = Boolean(facebookOcr && (facebookOcr.email || facebookOcr.name));
-
-  if (googleOcrUsable) {
-    logger.info(
-      `[Worker /audit] OCR read of the Google screenshot "${googleOcr?.name}" — vision call skipped (0 AI).`
-    );
-  }
-  if (facebook && facebookOcrUsable) {
-    logger.info(
-      `[Worker /audit] OCR read of the Facebook screenshot${
-        facebookOcr?.email ? ` — email ${facebookOcr.email}` : ""
-      } — vision call skipped (0 AI).`
-    );
-  }
-  if (google.ocrText && !googleOcrUsable) {
-    logger.info("[Worker /audit] OCR text unusable — falling back to the AI vision read.");
-  }
-
-  // Whatever still needs vision runs as ONE parallel step — Google is
-  // required, Facebook is best-effort — instead of one read after the other.
-  // Half the wall time of the old sequential reads, same failure semantics.
+  // Both screenshots are read by the vision chain in ONE parallel step —
+  // Google is required, Facebook is best-effort. Browser OCR was removed:
+  // the vision model proved 100% correct on real listings where OCR mangled
+  // ratings, dropped websites and even invented a name out of a UI header.
   const visionRead = async (
     kind: ScreenshotKind,
     upload: ScreenshotUpload,
@@ -325,36 +300,27 @@ async function ensureBusinessFromScreenshots(
   };
 
   const [googleRead, facebookRead] = await Promise.all([
-    !googleOcrUsable
+    google
       ? visionRead("google", google, 30_000)
-      : Promise.resolve({ fields: googleOcr, error: null as unknown }),
-    facebook && !facebookOcrUsable
+      : Promise.resolve({ fields: null, error: null as unknown }),
+    facebook
       ? visionRead("facebook", facebook, 25_000)
-      : Promise.resolve({
-          fields:
-            facebookOcrUsable && facebookOcr
-              ? { ...facebookOcr, phone: null, website: null, address: null, rating: null, reviewCount: null, category: null }
-              : null,
-          error: null as unknown,
-        }),
+      : Promise.resolve({ fields: null, error: null as unknown }),
   ]);
 
-  let googleFields: ExtractedScreenshotFields | null = googleRead.fields;
-  if (!googleOcrUsable && !googleRead.fields) {
+  if (!googleRead.fields) {
     const error = googleRead.error;
     if (error instanceof ScreenshotError) {
       throw new AuditPipelineError("SCREENSHOT_READ_FAILED", error.userMessage, error);
     }
     throw error ?? new Error("The Google screenshot read failed without an error.");
   }
-  if (!googleOcrUsable) {
-    googleFields = googleRead.fields;
-  }
+  const googleFields: ExtractedScreenshotFields = googleRead.fields;
 
   // Facebook is best-effort: no page (or an unreadable one) still leaves a
   // runnable audit — the website crawl gets a chance at the email instead.
   let facebookFields: ExtractedScreenshotFields | null = facebookRead.fields;
-  if (facebook && !facebookOcrUsable && !facebookRead.fields) {
+  if (facebook && !facebookRead.fields) {
     logger.warn(
       `[Worker /audit] Facebook read failed, continuing without it: ${getErrorMessage(facebookRead.error)}`
     );

@@ -7,7 +7,6 @@ import { Check, Image as ImageIcon, Loader2, Plus, RefreshCw, X } from "lucide-r
 import { logger } from "@/lib/logger";
 import { useToast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/errors";
-import { readScreenshotTextWithDeadline } from "@/lib/ocrClient";
 
 /**
  * Screenshot ingest + queue.
@@ -105,7 +104,6 @@ export default function ScreenshotClient() {
   const [files, setFiles] = useState<Record<Slot, File | null>>({ google: null, facebook: null });
   const [previews, setPreviews] = useState<Record<Slot, string | null>>({ google: null, facebook: null });
   const [submitting, setSubmitting] = useState(false);
-  const [busyNote, setBusyNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [queuedFlash, setQueuedFlash] = useState(false);
 
@@ -229,21 +227,9 @@ export default function ScreenshotClient() {
         files.facebook ? compressForUpload(files.facebook) : Promise.resolve(null),
       ]);
 
-      // Zero-AI OCR in the operator's browser: pull the listing text out of
-      // the screenshots so the worker can skip the AI vision read entirely.
-      // Best-effort — a failure here leaves the images as-is for the AI.
-      setBusyNote("Reading the screenshots with browser OCR (no AI)...");
-      const [googleText, facebookText] = await Promise.all([
-        readScreenshotTextWithDeadline(googleFile),
-        facebookFile ? readScreenshotTextWithDeadline(facebookFile) : Promise.resolve(null),
-      ]);
-      setBusyNote(null);
-
       const formData = new FormData();
       formData.append("google", googleFile);
       if (facebookFile) formData.append("facebook", facebookFile);
-      if (googleText.ok && googleText.text) formData.append("googleOcr", googleText.text);
-      if (facebookText?.ok && facebookText.text) formData.append("facebookOcr", facebookText.text);
 
       const response = await fetch("/api/businesses/manual", { method: "POST", body: formData });
       const data = await response.json().catch(() => ({}));
@@ -403,7 +389,7 @@ export default function ScreenshotClient() {
               {submitting ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  {busyNote ?? "Queueing..."}
+                  Queueing...
                 </>
               ) : (
                 <>
