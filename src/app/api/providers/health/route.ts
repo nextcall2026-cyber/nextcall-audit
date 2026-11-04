@@ -10,8 +10,8 @@ export async function GET() {
   try {
     const health = discoveryService.getProviderHealthSummary();
 
-    // Sending capacity is a "health" signal too: once Brevo and Resend are
-    // both spent the automation stops until 00:00 UTC, and this is where the
+    // Sending capacity is a "health" signal too: once every provider is
+    // spent the automation stops until 00:00 UTC, and this is where the
     // dashboard can see it coming.
     let email: {
       providers: Awaited<ReturnType<typeof emailQuotaService.getCapacities>>;

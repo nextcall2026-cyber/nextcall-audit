@@ -1,14 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { Business } from "@/types";
-import { persistenceService } from "@/services/persistenceService";
-import { prospectPersistenceService } from "@/services/prospectPersistenceService";
-import { getBusinessesCollection } from "@/lib/db";
-import {
-  cleanValue,
-  extractFromScreenshot,
-  ScreenshotError,
-} from "@/services/screenshotExtractor";
+import { getScreenshotUploadsCollection } from "@/lib/db";
 import { jobQueueService } from "@/services/jobQueueService";
 import { warmRouterInBackground } from "@/lib/ai/warmup";
 import { logger } from "@/lib/logger";
@@ -16,50 +8,17 @@ import { rateLimit } from "@/lib/rateLimiter";
 import { getErrorMessage } from "@/lib/errors";
 
 /**
- * Ingest: two screenshots in, one queued audit out.
+ * Ingest: two screenshots in, one instantly-queued job out.
  *
- * This used to do the whole job — crawl, audit, AI report, pipeline — inside
- * one request, so a 30–60 second run could be cut off by the host and lost.
- * Now it does only what needs the images (read them) and hands the slow work
- * to the audit worker through the job queue. The response comes back in a few
- * seconds and the operator can drop the next business straight away.
- *
- * The screenshots are read and discarded — nothing is stored, so there is no
- * blob storage to pay for and no cleanup job to run.
+ * ZERO AI on this path — the operator queues as fast as they can paste. Both
+ * images are stored (base64, compressed by the browser first) and handed to
+ * the audit worker, which reads them with the one shared AI chain, creates the
+ * business, runs the duplicate check and then the whole audit pipeline. The
+ * uploads are deleted as soon as the read has turned them into a business, so
+ * there is no blob storage bill and nothing left to clean up but strays.
  */
 
-function normalizeWebsite(input: string | null): string | null {
-  if (!input) return null;
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return `https://${trimmed}`;
-  return trimmed;
-}
-
-function domainOf(url: string): string | null {
-  try {
-    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url) ? url : `https://${url}`;
-    return new URL(withScheme).hostname.toLowerCase().replace(/^www\./, "");
-  } catch {
-    return null;
-  }
-}
-
-function normalizeName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-/**
- * A single cheap key so the duplicate check is one lookup instead of a full
- * collection scan: the website domain when there is one, otherwise the
- * squashed business name. A duplicate that slips past this (same business,
- * different domain) is still caught later by the one-business-one-email guard
- * at send time.
- */
-function dedupeKeyFor(name: string, website: string | null): string {
-  const domain = website ? domainOf(website) : null;
-  return domain ? `d:${domain}` : `n:${normalizeName(name)}`;
-}
+const MAX_STORED_BYTES = 6 * 1024 * 1024; // per image, after browser compression
 
 export async function POST(request: NextRequest) {
   try {
@@ -67,12 +26,13 @@ export async function POST(request: NextRequest) {
     const rateLimitResponse = rateLimit(request, { intervalMs: 60_000, maxRequests: 20 });
     if (rateLimitResponse) return rateLimitResponse;
 
-    // The router sleeps when idle and takes 60-95s to wake. Nudge it now so the
-    // next upload finds it awake; this one may still pay the cold start.
+    // The router sleeps when idle and takes 60-95s to wake. Nudge it now so
+    // the worker's vision read (a minute away) finds it awake.
     warmRouterInBackground();
 
     const formData = await request.formData().catch(() => null);
     const googleFile = formData?.get("google");
+    const facebookFile = formData?.get("facebook");
 
     if (!(googleFile instanceof File)) {
       return NextResponse.json(
@@ -80,213 +40,101 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-
-    // The Facebook About panel is optional: plenty of businesses have no
-    // Facebook page at all. It is only the best place to find an email, not a
-    // requirement — without it the audit still runs and the website crawl gets
-    // a chance to find the address instead.
-    const facebookFile = formData?.get("facebook");
-    const facebookProvided = facebookFile instanceof File;
-
-    // Both images are read at the same time, each with a hard cap.
-    // Google is required — without a name there is nothing to audit.
-    // Facebook is best-effort: if that chain is slow or down we still queue the
-    // business, just without the email, instead of failing the whole ingest.
-    const [googleSettled, facebookSettled] = await Promise.allSettled([
-      // A healthy vision read takes 1.5-7s. Waiting longer only keeps the
-      // operator staring at a spinner when the chain is hanging — and a
-      // hanging chain never answers, so a big timeout buys nothing.
-      extractFromScreenshot("google", googleFile, { timeoutMs: 18_000 }),
-      facebookProvided
-        ? extractFromScreenshot("facebook", facebookFile as File, {
-            timeoutMs: 12_000,
-          })
-        : Promise.resolve(null),
-    ]);
-
-    if (googleSettled.status === "rejected") {
-      logger.warn(
-        `[API /businesses/manual] Google read failed: ${getErrorMessage(googleSettled.reason)}`
-      );
+    for (const file of [googleFile, facebookFile]) {
+      if (file instanceof File) {
+        if (!file.type.startsWith("image/")) {
+          return NextResponse.json(
+            { error: "That file is not an image. Use a PNG, JPG or WEBP screenshot." },
+            { status: 400 }
+          );
+        }
+        if (file.size > MAX_STORED_BYTES) {
+          return NextResponse.json(
+            {
+              error: `The ${file === googleFile ? "Google" : "Facebook"} screenshot is larger than 6 MB. Paste a smaller or clearer screenshot.`,
+            },
+            { status: 400 }
+          );
+        }
+      }
     }
 
-    const google = googleSettled.status === "fulfilled" ? googleSettled.value : null;
-    const googleFailed = googleSettled.status === "rejected";
-    const facebook = facebookSettled.status === "fulfilled" ? facebookSettled.value : null;
-    const facebookFailed = facebookSettled.status === "rejected";
+    const collection = await getScreenshotUploadsCollection();
+    const googleId = randomUUID();
+    const facebookId = facebookFile instanceof File ? randomUUID() : null;
 
-    if (facebookFailed) {
-      logger.warn(
-        `[API /businesses/manual] Facebook read failed, queueing without it: ${getErrorMessage(
-          (facebookSettled as PromiseRejectedResult).reason
-        )}`
-      );
-    }
-
-    // Google wins where both have a value (it is the canonical listing);
-    // Facebook fills the gaps — above all the email address.
-    const name = cleanValue(google?.name) ?? cleanValue(facebook?.name);
-    if (!name) {
-      // Neither read produced a business name. If one of them already has a
-      // precise, actionable message (a timeout, an unreadable image), surface
-      // that instead of a generic one.
-      const failure =
-        googleSettled.status === "rejected"
-          ? googleSettled.reason
-          : facebookSettled.status === "rejected"
-            ? facebookSettled.reason
-            : null;
-
-      if (failure instanceof ScreenshotError) throw failure;
-
-      return NextResponse.json(
-        {
-          error:
-            "The business name could not be read from the screenshots. Take the Google screenshot again with the business name clearly visible.",
-        },
-        { status: 422 }
-      );
-    }
-
-    const website = normalizeWebsite(cleanValue(google?.website) ?? cleanValue(facebook?.website));
-    const phone = cleanValue(google?.phone) ?? cleanValue(facebook?.phone);
-    const address = cleanValue(google?.address) ?? cleanValue(facebook?.address);
-    const category = cleanValue(google?.category) ?? cleanValue(facebook?.category);
-    const email = (cleanValue(facebook?.email) ?? cleanValue(google?.email))?.toLowerCase() ?? null;
-    const rating = google?.rating ?? facebook?.rating ?? null;
-    const reviewCount = google?.reviewCount ?? facebook?.reviewCount ?? null;
-
-    // 1. Duplicate check — one lookup, no collection scan.
-    const dedupeKey = dedupeKeyFor(name, website);
-    const existing = await findExistingBusiness(dedupeKey);
-
-    if (existing) {
-      const existingProspect = await prospectPersistenceService.getProspectByBusinessId(existing.id);
-      logger.info(`[API /businesses/manual] Duplicate blocked: "${name}" (${existing.id}).`);
-
-      return NextResponse.json(
-        {
-          duplicate: true,
-          error: `"${existing.name}" is already in your app, so nothing was queued. Open it from the pipeline if you want to continue with it.`,
-          match: {
-            businessId: existing.id,
-            name: existing.name,
-            prospectId: existingProspect?.id ?? null,
-          },
-        },
-        { status: 409 }
-      );
-    }
-
-    // 2. Save the business with everything the screenshots told us.
-    const id = randomUUID();
-
-    const business: Business = {
-      id,
-      name,
-      phone: phone ?? undefined,
-      website: website ?? undefined,
-      location: address ? { address } : undefined,
-      rating: rating ?? undefined,
-      reviewCount: reviewCount ?? undefined,
-      categories: category ? [category] : [],
-      providerIds: { manual: id },
-      status: "active",
-      sources: ["MANUAL"],
-      notes: buildNotes(facebook ?? {}),
-      dedupeKey,
-      enrichment: email
-        ? {
-            status: "NOT_STARTED",
-            emails: [
-              {
-                address: email,
-                type: "BUSINESS" as const,
-                sourceUrl: "facebook about screenshot",
-                sourceType: "VISIBLE_TEXT" as const,
-                confidence: 100,
-              },
-            ],
-            preferredEmail: email,
-          }
-        : undefined,
+    // The operator's browser OCR text (best-effort, may be absent). Cap it —
+    // a screenshot of a listing is a couple of KB of text, anything longer is
+    // a misbehaving client.
+    const capOcr = (raw: FormDataEntryValue | null): string | undefined => {
+      const text = typeof raw === "string" ? raw.trim() : "";
+      return text ? (text.length > 20_000 ? text.slice(0, 20_000) : text) : undefined;
     };
+    const googleOcrText = capOcr(formData?.get("googleOcr") ?? null);
+    const facebookOcrText = capOcr(formData?.get("facebookOcr") ?? null);
 
-    await persistenceService.upsertBusiness(business);
+    const now = new Date().toISOString();
+    const uploads: Array<{
+      id: string;
+      kind: "google" | "facebook";
+      mimeType: string;
+      dataBase64: string;
+      bytes: number;
+      ocrText?: string;
+      createdAt: string;
+    }> = [
+      {
+        id: googleId,
+        kind: "google" as const,
+        mimeType: googleFile.type,
+        dataBase64: Buffer.from(await googleFile.arrayBuffer()).toString("base64"),
+        bytes: googleFile.size,
+        ocrText: googleOcrText,
+        createdAt: now,
+      },
+    ];
+    if (facebookFile instanceof File && facebookId) {
+      uploads.push({
+        id: facebookId,
+        kind: "facebook" as const,
+        mimeType: facebookFile.type,
+        dataBase64: Buffer.from(await facebookFile.arrayBuffer()).toString("base64"),
+        bytes: facebookFile.size,
+        ocrText: facebookOcrText,
+        createdAt: now,
+      });
+    }
 
-    // 3. Hand the slow part to the worker.
-    const job = await jobQueueService.enqueue({ businessId: id, businessName: name });
+    await collection.insertMany(uploads);
+
+    const job = await jobQueueService.enqueue({
+      screenshots: { googleId, facebookId },
+    });
 
     if (!job) {
       return NextResponse.json(
         {
           error:
-            "The business was saved, but it could not be added to the queue. Please try adding it again.",
-          businessId: id,
+            "The screenshots were stored, but they could not be added to the queue. Please try again.",
         },
         { status: 500 }
       );
     }
 
-    logger.info(`[API /businesses/manual] Queued "${name}" (${id}) as job ${job.id}.`);
+    logger.info(
+      `[API /businesses/manual] Queued screenshots (${uploads.length} image(s)) as job ${job.id} — no AI at queue time.`
+    );
 
     return NextResponse.json({
       queued: true,
       jobId: job.id,
-      businessId: id,
-      businessName: name,
-      emailFound: Boolean(email),
-      hasWebsite: Boolean(website),
-      // False when no Facebook screenshot was supplied at all — the UI says so
-      // instead of implying the page simply had no email.
-      facebookUsed: Boolean(facebook),
-      ...(googleFailed
-        ? {
-            warning:
-              "The Google listing could not be read in time, so this audit was built from the Facebook page only — the rating and review count will be missing.",
-          }
-        : facebookFailed
-          ? {
-              warning:
-                "The Facebook screenshot could not be read, so no email was found. The audit will still run.",
-            }
-          : {}),
+      hasFacebook: Boolean(facebookId),
     });
   } catch (error) {
-    if (error instanceof ScreenshotError) {
-      return NextResponse.json({ error: error.userMessage }, { status: error.status });
-    }
-
     logger.error("[API /businesses/manual] Ingest failed:", getErrorMessage(error));
     return NextResponse.json(
-      { error: "Something went wrong while reading the screenshots. Please try again." },
+      { error: "Something went wrong while queueing the screenshots. Please try again." },
       { status: 500 }
     );
   }
-}
-
-async function findExistingBusiness(dedupeKey: string): Promise<Business | null> {
-  try {
-    const collection = await getBusinessesCollection();
-    const doc = await collection.findOne({ dedupeKey });
-    return (doc as unknown as Business) ?? null;
-  } catch (error) {
-    // Fail open: a lookup problem must not block the operator from adding work.
-    logger.warn(`[API /businesses/manual] Duplicate lookup skipped: ${getErrorMessage(error)}`);
-    return null;
-  }
-}
-
-/** The Facebook extras feed the audit — services and hours are real signals. */
-function buildNotes(facebook: {
-  services?: string[] | null;
-  hours?: string | null;
-}): string | undefined {
-  const lines: string[] = [];
-
-  const services = (facebook.services ?? []).map((s) => s.trim()).filter(Boolean);
-  if (services.length > 0) lines.push(`Services (from Facebook): ${services.join(", ")}`);
-  if (facebook.hours) lines.push(`Hours (from Facebook): ${facebook.hours}`);
-
-  return lines.length > 0 ? lines.join("\n") : undefined;
 }

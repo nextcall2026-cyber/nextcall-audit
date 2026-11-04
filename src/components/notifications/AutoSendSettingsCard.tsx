@@ -55,7 +55,7 @@ const EDITABLE_KEYS: EditableKey[] = [
     "endHour",
 ];
 
-const DAILY_CAPS = [5, 10, 20, 30, 50, 100, 200, 350];
+const DAILY_CAPS = [5, 10, 20, 30, 50, 100, 200, 300];
 
 /** Preset used when the optional business-hours window is switched on. */
 const BUSINESS_START_HOUR = 9;
@@ -399,7 +399,7 @@ export default function AutoSendSettingsCard() {
                             <div className="flex flex-col">
                                 <span className="text-sm font-medium">Max emails per day</span>
                                 <span className="text-xs text-muted-foreground">
-                                    Never send more than this in one day. Brevo allows 300 a day and Resend adds 50, so 350 is the ceiling.
+                                    Never send more than this in one day. Mailgun (100) + Mailtop (150) + Resend (50) add up to 300, the hard ceiling.
                                 </span>
                             </div>
                             <select

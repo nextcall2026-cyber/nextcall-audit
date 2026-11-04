@@ -16,16 +16,18 @@ import {
   SendEmailInput,
   SendEmailOutput,
 } from "@/services/emailProvider";
-import { brevoEmailService } from "@/services/brevoEmailService";
+import { mailgunEmailService } from "@/services/mailgunEmailService";
+import { mailtopEmailService } from "@/services/mailtopEmailService";
 import { resendEmailService } from "@/services/resendEmailService";
 import { emailQuotaService } from "@/services/emailQuotaService";
 
 /**
  * The single entry point every send goes through.
  *
- * Two providers, one budget: Brevo takes the first 300 emails of the day, then
- * Resend carries the next 50 — 350 sends in total instead of the 100 the
- * Resend-only setup allowed. When both are spent the send fails with a message
+ * Three providers, one budget: Mailgun takes the first 100 emails of the day,
+ * Mailtop (Mailtrap) the next 150, and Resend carries the last 50 — 300 sends
+ * in total across the three free tiers. When every tier is spent the send
+ * fails with a message
  * that names the quotas, which is the same signal the automation pass uses to
  * stop instead of burning a PDF render per prospect.
  *
@@ -36,7 +38,8 @@ import { emailQuotaService } from "@/services/emailQuotaService";
 export class EmailService {
   constructor(
     private readonly providers: Partial<Record<EmailProviderName, IEmailProvider>> = {
-      brevo: brevoEmailService,
+      mailgun: mailgunEmailService,
+      mailtop: mailtopEmailService,
       resend: resendEmailService,
     },
     private readonly quota: QuotaGateway = emailQuotaService
@@ -135,7 +138,7 @@ export class EmailService {
     const configured = capacities.filter((c) => c.configured);
 
     if (configured.length === 0) {
-      return "No email provider is configured. Set BREVO_API_KEY (and RESEND_API_KEY as overflow).";
+      return "No email provider is configured. Set MAILGUN_API_KEY, MAILTOP_API_KEY and RESEND_API_KEY.";
     }
 
     const remaining = totalRemaining(configured);

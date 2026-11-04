@@ -242,9 +242,9 @@ async markAsSent(
   }
 
   /**
-   * Finds an outreach record by the provider's message id (Resend id or Brevo
-   * messageId). Used by the Brevo webhook, which needs the record behind an
-   * unsubscribe event without changing its delivery status.
+   * Finds an outreach record by the provider's message id (Mailgun id, Mailtrap
+   * message id, or Resend id). Used by the delivery webhooks, which need the
+   * record behind an unsubscribe event without changing its delivery status.
    */
   async findByMessageId(messageId: string): Promise<OutreachRecord | null> {
     try {
@@ -351,15 +351,17 @@ async markAsSent(
   /**
    * Sends since `sinceIso` per provider.
    *
-   * This is the day's spend for the Brevo-first routing: Brevo is offered
-   * while it has room, Resend only takes the overflow. Records written before
-   * the two-provider switch have no `provider` field — they were all sent
-   * through Resend, so they are counted there.
+   * This is the day's spend for the Mailgun-first routing: Mailgun is offered
+   * while it has room, Mailtop takes the next stretch and Resend only the
+   * overflow. Records written before the current provider set have no
+   * `provider` field — those were all sent through Resend, so they are
+   * counted there. Records from the retired Brevo era are ignored: Brevo is
+   * gone and its sends must not consume today's Mailgun/Mailtop/Resend quota.
    */
   async countSentSinceByProvider(
     sinceIso: string
   ): Promise<Record<EmailProviderName, number>> {
-    const counts: Record<EmailProviderName, number> = { brevo: 0, resend: 0 };
+    const counts: Record<EmailProviderName, number> = { mailgun: 0, mailtop: 0, resend: 0 };
 
     try {
       const collection = await getOutreachCollection();
@@ -368,8 +370,14 @@ async markAsSent(
 
       for (const doc of docs) {
         if (!doc.sentAt || doc.sentAt < sinceIso) continue;
-        const provider: EmailProviderName = doc.provider === "brevo" ? "brevo" : "resend";
-        counts[provider] += 1;
+        const provider = doc.provider as EmailProviderName | "brevo" | null | undefined;
+
+        if (provider === "brevo") continue;
+        const counted: EmailProviderName =
+          provider === "mailgun" || provider === "mailtop" || provider === "resend"
+            ? provider
+            : "resend";
+        counts[counted] += 1;
       }
 
       return counts;

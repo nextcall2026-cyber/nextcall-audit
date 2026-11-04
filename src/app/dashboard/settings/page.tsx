@@ -31,7 +31,8 @@ function ConfigRow({ label, configured, description }: { label: string; configur
 
 export default async function SettingsPage() {
     const hasOpenAI = !!env.OPENAI_API_KEY;
-    const hasBrevo = !!env.BREVO_API_KEY;
+    const hasMailgun = !!env.MAILGUN_API_KEY;
+    const hasMailtop = !!env.MAILTOP_API_KEY;
     const hasResend = !!env.RESEND_API_KEY;
     const hasSerpApi = !!env.SERPAPI_API_KEY;
     const hasApify = !!env.APIFY_API_TOKEN && !!env.APIFY_ACTOR_ID;
@@ -125,14 +126,19 @@ export default async function SettingsPage() {
                     </CardHeader>
                     <CardContent className="space-y-1">
                         <ConfigRow
-                            label="Brevo API"
-                            configured={hasBrevo}
-                            description="Primary sender — carries the first 300 emails of the day"
+                            label="Mailgun API"
+                            configured={hasMailgun}
+                            description="First sender — carries the first 100 emails of the day"
+                        />
+                        <ConfigRow
+                            label="Mailtop (Mailtrap) API"
+                            configured={hasMailtop}
+                            description="Second sender — takes the next 150 once Mailgun is spent"
                         />
                         <ConfigRow
                             label="Resend API"
                             configured={hasResend}
-                            description="Overflow sender — takes the next 50 once Brevo is spent"
+                            description="Overflow sender — the last 50 once the other two are spent"
                         />
                     </CardContent>
                 </Card>
@@ -170,7 +176,8 @@ export default async function SettingsPage() {
                             })}
 
                             <p className="text-xs text-muted-foreground">
-                                Brevo sends first, Resend takes over when Brevo&apos;s daily quota is spent. Both reset at 00:00 UTC.
+                                Mailgun sends first, Mailtop takes over when Mailgun&apos;s daily quota is spent,
+                                and Resend covers the rest. All reset at 00:00 UTC.
                             </p>
                         </CardContent>
                     </Card>

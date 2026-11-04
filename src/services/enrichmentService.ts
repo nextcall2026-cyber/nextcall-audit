@@ -56,41 +56,37 @@ export class EnrichmentOrchestrator {
       // Add homepage to queue with highest priority
       queue.push({ url: targetUrl, score: 1000 });
 
-      // 3. Process Queue
-      while (queue.length > 0 && visited.size < CRAWL_LIMITS.maxPages) {
-        // Sort by score descending
-        queue.sort((a, b) => b.score - a.score);
-        const currentItem = queue.shift();
+      // 3. Process Queue — homepage first (its links seed the queue), then the
+      //    remaining pages in small parallel batches, so a 5-page site no
+      //    longer costs 5 sequential round-trips. The crawl deadline keeps the
+      //    worst case bounded for the audit worker's tight time window.
+      const crawlDeadline = Date.now() + CRAWL_LIMITS.overallTimeoutMs;
 
-        if (!currentItem || visited.has(currentItem.url)) continue;
-
-        visited.add(currentItem.url);
+      const processPage = async (item: { url: string; score: number }): Promise<void> => {
+        visited.add(item.url);
         pagesAttempted++;
 
         // Fetch HTML
-        const fetchResult = await fetchHtml(currentItem.url);
+        const fetchResult = await fetchHtml(item.url);
         if (!fetchResult.success || !fetchResult.html) {
           pagesFailed++;
-          continue;
+          return;
         }
 
         pagesSuccessful++;
         const html = fetchResult.html;
-        const sourceUrl = currentItem.url;
+        const sourceUrl = item.url;
 
         if (fetchResult.requiresJsRendering) {
           jsRenderingLikely = true;
         }
 
         // Extract Data
-        const emails = emailExtractor.extract(html, sourceUrl);
-        emails.forEach(e => allEmails.set(e.address, e));
+        emailExtractor.extract(html, sourceUrl).forEach(e => allEmails.set(e.address, e));
 
-        const phones = phoneExtractor.extract(html, sourceUrl);
-        phones.forEach(p => allPhones.set(p.normalized, p));
+        phoneExtractor.extract(html, sourceUrl).forEach(p => allPhones.set(p.normalized, p));
 
-        const socials = extractSocialProfiles(html, sourceUrl);
-        socials.forEach(s => allSocials.set(s.platform, s));
+        extractSocialProfiles(html, sourceUrl).forEach(s => allSocials.set(s.platform, s));
 
         if (!bookingData.detected) {
           const booking = extractBookingData(html, sourceUrl);
@@ -124,6 +120,36 @@ export class EnrichmentOrchestrator {
             }
           });
         }
+      };
+
+      while (queue.length > 0 && visited.size < CRAWL_LIMITS.maxPages) {
+        // Sort by score descending
+        queue.sort((a, b) => b.score - a.score);
+        const currentItem = queue.shift();
+
+        if (!currentItem || visited.has(currentItem.url)) continue;
+
+        // Stop when the crawl budget is spent — but never before the homepage.
+        if (visited.size > 0 && Date.now() > crawlDeadline) break;
+
+        if (visited.size === 0) {
+          await processPage(currentItem);
+          continue;
+        }
+
+        // Secondary pages: fetch a small batch in parallel.
+        const batch = [currentItem];
+        const room = CRAWL_LIMITS.maxPages - visited.size;
+        while (
+          batch.length < Math.min(CRAWL_LIMITS.parallelPages, room) &&
+          queue.length > 0
+        ) {
+          const next = queue.shift();
+          if (!next || visited.has(next.url)) continue;
+          batch.push(next);
+        }
+
+        await Promise.all(batch.map((page) => processPage(page)));
       }
 
       // 4. Aggregate & Finalize Data

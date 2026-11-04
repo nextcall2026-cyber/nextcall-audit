@@ -189,9 +189,9 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
  ${audit.opportunities.length > 0 ? audit.opportunities.map(o => `- ${o.title}: ${o.evidence}`).join("\n") : "- None mapped by deterministic engine."}
 `;
 
-    // One attempt against one chain. The router already falls back between the
-    // models inside a chain, so this only re-runs when the whole chain is spent.
-    const attempt = async (chain: string) => {
+    // One attempt against the single chain. The gateway already falls back
+    // across providers, so this only re-runs when every provider failed.
+    const attempt = async () => {
       const llm = await generateLLMResponse({
         system: systemPrompt,
         user: userPrompt,
@@ -204,7 +204,13 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
         maxOutputTokens: 8000,
         json: true,
         thinking: "low", // small reasoning budget improves prose quality for this long-form report
-        model: chain,
+        model: AI_CHAINS.main,
+        // Hard ceiling for the report call: a slow or hung router model must
+        // never eat the worker function's whole execution window (60s). A
+        // failed report does not fail the audit — it is retried as its own
+        // small REPORT job / regenerated before any email is sent.
+        timeoutMs: 45_000,
+        singleAttempt: true,
       });
 
       logger.info(
@@ -223,28 +229,14 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
     };
 
     try {
-      const report = await attempt(AI_CHAINS.reportMain);
+      const report = await attempt();
       logger.info(`[AIReportService] Successfully generated advanced report for ${business.name}.`);
       return report;
     } catch (error) {
-      // REPORT-MAIN is spent or failing — the backup chain exists for exactly
-      // this moment, and it is a different set of models.
-      logger.warn(
-        `[AIReportService] REPORT-MAIN failed, trying REPORT-BACKUP: ${getErrorMessage(error)}`
+      logger.error(
+        `[AIReportService] Failed to generate the AI audit report: ${getErrorMessage(error)}`
       );
-
-      try {
-        const report = await attempt(AI_CHAINS.reportBackup);
-        logger.info(
-          `[AIReportService] Report recovered on the backup chain for ${business.name}.`
-        );
-        return report;
-      } catch (backupError) {
-        logger.error(
-          `[AIReportService] Failed to generate report on both chains: ${getErrorMessage(backupError)}`
-        );
-        throw new Error(`Failed to generate AI audit report: ${getErrorMessage(backupError)}`);
-      }
+      throw new Error(`Failed to generate AI audit report: ${getErrorMessage(error)}`);
     }
   }
 }

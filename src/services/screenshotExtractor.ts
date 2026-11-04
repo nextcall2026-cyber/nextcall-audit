@@ -3,7 +3,6 @@ import "server-only";
 import { z } from "zod";
 import { generateLLMResponse } from "@/lib/ai";
 import { AI_CHAINS } from "@/lib/ai/chains";
-import { isChainSlow, recordChainTiming } from "@/lib/ai/chainHealth";
 import { logger } from "@/lib/logger";
 
 /**
@@ -15,11 +14,18 @@ import { logger } from "@/lib/logger";
  *                  most for the email address: ~95% of pages show one there,
  *                  while only ~20% of small-business websites do.
  *
- * The image is never stored — it is read here and dropped, which is why the
- * app needs no blob storage and no cleanup job.
+ * Called by the audit worker while a queued job is being processed — never on
+ * the upload path, so queueing a business is instant and burns no tokens.
+ *
+ * One chain, one call: the AI_CHAINS.main route (fastest model first). The
+ * gateway itself falls back across providers, and rate limits are worth
+ * waiting out because the router reports exactly when its routes free up.
  */
 
 export type ScreenshotKind = "google" | "facebook";
+
+/** Where the image comes from: an uploaded File, or bytes stored at ingest. */
+export type ScreenshotSource = File | { bytes: Buffer; mimeType: string };
 
 const ExtractedSchema = z.object({
   name: z.string().nullish(),
@@ -70,25 +76,12 @@ Rules:
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 /**
- * How long the primary chain gets on its own before the other vision chain is
- * asked as well.
- *
- * Measured on production: auto:vision-social answers a screenshot in ~1.5-7s
- * while auto:vision-listing can take 40-95s. Waiting out the slow one costs the
- * operator a minute per business, so after a few seconds we simply ask the
- * other chain too and take whichever answers first. In the normal case the
- * primary wins inside the head start and the second call never happens.
- */
-const HEDGE_DELAY_MS = 4_000;
-
-/**
  * Rate limits are worth waiting out: the router reports exactly when its
  * routes free up ("Soonest reset ~4s"), and every model in the chain being
  * briefly limited is a normal, self-clearing condition — not a reason to send
  * the operator back to take another screenshot.
  */
 const MAX_RATE_LIMIT_RETRIES = 2;
-const RATE_LIMIT_MEMORY_MS = 60_000;
 
 /** How long the router asked us to wait, in ms; null when it is not a 429. */
 function rateLimitWaitMs(error: unknown): number | null {
@@ -112,19 +105,20 @@ export class ScreenshotError extends Error {
   }
 }
 
-/** Both vision chains, in the order to try them for this screenshot type. */
-function chainsFor(kind: ScreenshotKind): [string, string] {
-  const [primary, backup] =
-    kind === "google"
-      ? [AI_CHAINS.visionListing, AI_CHAINS.visionSocial]
-      : [AI_CHAINS.visionSocial, AI_CHAINS.visionListing];
-
-  // If the leading chain was slow or failing within the last few minutes, lead
-  // with the other one instead. The hedge would rescue the read anyway, but
-  // this way a stuck chain costs nothing rather than a 6s head start per
-  // upload. When its memory expires it gets to lead again.
-  if (isChainSlow(primary) && !isChainSlow(backup)) return [backup, primary];
-  return [primary, backup];
+/** Normalises both source shapes into raw bytes plus a MIME type. */
+async function toImage(source: ScreenshotSource): Promise<{ bytes: Buffer; mimeType: string }> {
+  // instanceof first: `"bytes" in source` also matches a File (Blob exposes a
+  // bytes() method), which would silently take the wrong branch.
+  if (source instanceof File) {
+    if (!source.type.startsWith("image/")) {
+      throw new ScreenshotError("One of the uploaded files is not an image. Use PNG, JPG or WEBP.", 400);
+    }
+    if (source.size > MAX_IMAGE_BYTES) {
+      throw new ScreenshotError("That screenshot is larger than 8 MB. Please use a smaller image.", 400);
+    }
+    return { bytes: Buffer.from(await source.arrayBuffer()), mimeType: source.type };
+  }
+  return { bytes: source.bytes, mimeType: source.mimeType };
 }
 
 /** One read. Returns null when the reply was not usable JSON; throws on failure. */
@@ -132,7 +126,6 @@ async function readOnce(
   kind: ScreenshotKind,
   bytes: Buffer,
   mimeType: string,
-  model: string,
   timeoutMs: number
 ): Promise<ExtractedScreenshotFields | null> {
   const label = kind === "google" ? "Google Business Profile" : "Facebook About";
@@ -145,10 +138,10 @@ async function readOnce(
     maxOutputTokens: 1200,
     json: true,
     thinking: "off",
-    model,
+    model: AI_CHAINS.main,
     timeoutMs,
-    // The upload has a hard time budget: the gateway's extra 2s-delayed retry
-    // would turn one timeout into two and blow the request.
+    // The worker pass has a hard time budget: the gateway's extra 2s-delayed
+    // retry would turn one timeout into two and blow the budget.
     singleAttempt: true,
   });
 
@@ -164,139 +157,81 @@ async function readOnce(
   return null;
 }
 
-/** Resolves with the first non-null value; null only when every input is null. */
-function firstSuccess<T>(promises: Array<Promise<T | null>>): Promise<T | null> {
-  return new Promise((resolve) => {
-    let pending = promises.length;
-    let settled = false;
-
-    const finish = (value: T | null) => {
-      pending -= 1;
-      if (settled) return;
-      if (value) {
-        settled = true;
-        resolve(value);
-      } else if (pending === 0) {
-        settled = true;
-        resolve(null);
-      }
-    };
-
-    for (const promise of promises) {
-      promise.then(finish).catch(() => finish(null));
-    }
-  });
-}
-
 export async function extractFromScreenshot(
   kind: ScreenshotKind,
-  file: File,
+  source: ScreenshotSource,
   options: { timeoutMs?: number } = {}
 ): Promise<ExtractedScreenshotFields> {
-  if (!file.type.startsWith("image/")) {
-    throw new ScreenshotError("One of the uploaded files is not an image. Use PNG, JPG or WEBP.", 400);
-  }
-  if (file.size > MAX_IMAGE_BYTES) {
-    throw new ScreenshotError("That screenshot is larger than 8 MB. Please use a smaller image.", 400);
-  }
-
-  const bytes = Buffer.from(await file.arrayBuffer());
+  const { bytes, mimeType } = await toImage(source);
   const label = kind === "google" ? "Google Business Profile" : "Facebook About";
   const budget = options.timeoutMs ?? 30_000;
-  const [primaryChain, backupChain] = chainsFor(kind);
+  const deadline = Date.now() + budget;
 
   let lastError: unknown = null;
-  const run = async (model: string, timeoutMs: number) => {
-    const startedAt = Date.now();
-    const deadline = startedAt + timeoutMs;
 
-    for (let attempt = 0; ; attempt++) {
-      const remaining = Math.max(5_000, deadline - Date.now());
-      try {
-        const fields = await readOnce(kind, bytes, file.type, model, remaining);
-        // An unusable reply still means the chain answered — that is a content
-        // problem, not a slow chain.
-        recordChainTiming(model, Date.now() - startedAt, true);
-        return fields;
-      } catch (error) {
-        lastError = error;
-        const waitMs = rateLimitWaitMs(error);
+  for (let attempt = 0; ; attempt++) {
+    const remaining = Math.max(5_000, deadline - Date.now());
+    try {
+      const fields = await readOnce(kind, bytes, mimeType, remaining);
+      if (fields) return fields;
 
-        // A rate limit is not a broken chain: the router says when its routes
-        // free up ("Soonest reset ~4s"), so wait exactly that long and try
-        // again instead of failing the upload.
-        if (waitMs === null || attempt >= MAX_RATE_LIMIT_RETRIES || Date.now() + waitMs >= deadline) {
-          recordChainTiming(
-            model,
-            Date.now() - startedAt,
-            false,
-            waitMs === null ? undefined : RATE_LIMIT_MEMORY_MS
-          );
-          logger.warn(
-            `[ScreenshotExtractor] ${label} via ${model} failed — ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-          return null;
-        }
+      // The model answered but the reply was unusable — retrying the same
+      // image on the same chain rarely changes that, and the caller treats
+      // this as "unreadable" rather than "the AI is down".
+      throw new ScreenshotError(describeFailure(label, null));
+    } catch (error) {
+      if (error instanceof ScreenshotError) throw error;
 
+      lastError = error;
+      const waitMs = rateLimitWaitMs(error);
+
+      // A rate limit is not a broken chain: the router says when its routes
+      // free up ("Soonest reset ~4s"), so wait exactly that long and try
+      // again instead of failing the job.
+      if (waitMs === null || attempt >= MAX_RATE_LIMIT_RETRIES || Date.now() + waitMs >= deadline) {
         logger.warn(
-          `[ScreenshotExtractor] ${label} via ${model} is rate limited — retrying in ${waitMs}ms.`
+          `[ScreenshotExtractor] ${label} failed — ${
+            error instanceof Error ? error.message : String(error)
+          }`
         );
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        throw new ScreenshotError(describeFailure(label, lastError));
       }
+
+      logger.warn(
+        `[ScreenshotExtractor] ${label} is rate limited — retrying in ${waitMs}ms.`
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
-  };
-
-  // The primary gets a head start. If it is still thinking when the timer
-  // fires, the other vision chain is asked as well — whichever answers first
-  // wins. `done` stops the second call when the first one was quick.
-  let done = false;
-  const primaryRun = run(primaryChain, budget);
-  const backupRun = new Promise<ExtractedScreenshotFields | null>((resolve) => {
-    setTimeout(() => {
-      if (done) resolve(null);
-      else void run(backupChain, Math.max(10_000, budget - HEDGE_DELAY_MS)).then(resolve);
-    }, HEDGE_DELAY_MS);
-  });
-
-  const parsed = await firstSuccess([primaryRun, backupRun]);
-  done = true;
-
-  if (!parsed) {
-    throw new ScreenshotError(describeFailure(label, lastError));
   }
-
-  return parsed;
 }
 
 /**
  * Turns the raw failure into something the operator can act on.
  *
  * "Take a clearer screenshot" is the wrong advice when the image was fine and
- * the image reader was simply still starting up — that is what a cold router
- * looks like, and pressing the button again a few seconds later works.
+ * the model was simply rate-limited or still starting up — the queue's retry
+ * handles that on its own, so the message mostly matters for the DEAD state.
  */
 function describeFailure(label: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
 
   if (/429|rate.?limit|models exhausted|routing_exhausted/i.test(message)) {
-    return `All the AI models are briefly busy (free-tier rate limit), so the ${label} screenshot was not read. Wait about ten seconds and press "Add to queue" again — nothing is wrong with the screenshot.`;
+    return `All the AI models were briefly busy (free-tier rate limit), so the ${label} screenshot was not read. The job will retry automatically; nothing is wrong with the screenshot.`;
   }
 
   // Everything in here means "the reader could not answer right now", not
   // "your screenshot is bad". A timeout, a sleeping/starting server, a
-  // provider parked by the circuit breaker — all the same advice: retry.
+  // provider parked by the circuit breaker — all the same story: retry.
   const temporary =
     /no response|timed out|timeout|aborted|within \d+ms|fetch failed|ECONNRESET|cooling down|skipped|all llm providers failed|unavailable|503|502|504/i.test(
       message
     );
 
   if (temporary) {
-    return `The AI vision models did not answer in time, so the ${label} screenshot was not read. The screenshot itself is fine — this is the AI side. Wait a few seconds and press "Add to queue" again. If it keeps happening, open FreeLLMAPI and check the vision chains (auto:vision-listing / auto:vision-social): a model that accepts the request but never replies blocks the whole chain, so remove it or move a faster model to the top.`;
+    return `The AI vision model did not answer in time, so the ${label} screenshot was not read. The screenshot itself is fine — this is the AI side. The job will retry automatically. If it keeps happening, open FreeLLMAPI and check the chain (${AI_CHAINS.main}): a model that accepts the request but never replies blocks the whole chain, so remove it or move a faster model to the top.`;
   }
 
-  return `The ${label} screenshot could not be read. Take a clearer screenshot (make sure the business name and contact details are visible) and try again.`;
+  return `The ${label} screenshot could not be read. Take a clearer screenshot (make sure the business name and contact details are visible) and add the business again.`;
 }
 
 /** Trims a value and turns blanks into null. */

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Business } from "@/types";
+import { Business, AuditResult, StoredAudit, EnrichmentData } from "@/types";
 import { persistenceService } from "@/services/persistenceService";
 import { enrichmentService } from "@/services/enrichmentService";
 import { applyWebsiteAuditBackfill } from "@/services/websiteAuditBackfill";
@@ -43,11 +43,29 @@ export class AuditPipelineError extends Error {
 export interface AuditPipelineResult {
   prospectId: string | null;
   businessName: string;
-  /** True when the AI report failed but the audit itself is usable. */
-  reportMissing: boolean;
+  /** True when the audit has no AI report yet — a REPORT job should be queued. */
+  needsReport: boolean;
 }
 
 class AuditPipelineService {
+  /** Reuse a recent crawl instead of re-fetching the whole website. */
+  private static readonly ENRICHMENT_FRESH_MS = 24 * 60 * 60_000;
+
+  /** Same rule the manual /api/audit route applies to the deterministic audit. */
+  private static readonly AUDIT_FRESH_MS = 30 * 24 * 60 * 60_000;
+
+  private static enrichmentIsFresh(
+    enrichment: Business["enrichment"]
+  ): enrichment is EnrichmentData {
+    return Boolean(
+      enrichment &&
+        enrichment.status === "COMPLETED" &&
+        enrichment.completedAt &&
+        Date.now() - new Date(enrichment.completedAt).getTime() <
+          AuditPipelineService.ENRICHMENT_FRESH_MS
+    );
+  }
+
   async run(businessId: string): Promise<AuditPipelineResult> {
     const business = await persistenceService.getBusinessById(businessId);
     if (!business) {
@@ -59,18 +77,28 @@ class AuditPipelineService {
 
     // 1. Crawl + merge the notes the operator typed (or that came off the
     //    screenshot) on top of what the crawl found.
+    //
+    //    Checkpoint: a fresh crawl (last 24h) is reused instead of re-fetched,
+    //    so a retry resumes here instead of paying the whole crawl again.
     let enrichedBusiness: Business;
+    let crawledFresh = false;
     try {
-      const enrichment = await enrichmentService.enrichBusiness(business);
       const parsedNotes = parseBusinessNotes(business.notes ?? "");
-      const merged = mergeNotesIntoEnrichment(enrichment, parsedNotes);
+      let enrichment: EnrichmentData;
 
-      if (business.enrichment?.preferredEmail) {
-        merged.preferredEmail = business.enrichment.preferredEmail;
+      if (AuditPipelineService.enrichmentIsFresh(business.enrichment)) {
+        enrichment = mergeNotesIntoEnrichment(business.enrichment, parsedNotes);
+      } else {
+        enrichment = await enrichmentService.enrichBusiness(business);
+        crawledFresh = true;
       }
 
-      await persistenceService.updateEnrichmentData(businessId, merged);
-      enrichedBusiness = { ...business, enrichment: merged };
+      if (business.enrichment?.preferredEmail) {
+        enrichment.preferredEmail = business.enrichment.preferredEmail;
+      }
+
+      await persistenceService.updateEnrichmentData(businessId, enrichment);
+      enrichedBusiness = { ...business, enrichment };
     } catch (error) {
       throw new AuditPipelineError(
         "ENRICHMENT_FAILED",
@@ -88,38 +116,50 @@ class AuditPipelineService {
     );
 
     // 3. Deterministic audit — no network, no AI, so it cannot fail silently.
-    let auditResult;
-    try {
-      auditResult = await auditEngine.runAudit(enrichedBusiness);
-    } catch (error) {
-      throw new AuditPipelineError(
-        "AUDIT_FAILED",
-        "The audit could not be calculated from this business's data. It will be retried automatically.",
-        error
-      );
+    //    Checkpoint: when the crawl was reused (the inputs cannot have
+    //    changed) and a recent audit exists, reuse it instead of recalculating.
+    let auditResult: AuditResult | null = null;
+    let auditRecord: StoredAudit | null = null;
+
+    if (!crawledFresh) {
+      const existing = await auditPersistenceService.getLatestAudit(businessId);
+      if (
+        existing &&
+        Date.now() - new Date(existing.createdAt).getTime() <
+          AuditPipelineService.AUDIT_FRESH_MS
+      ) {
+        auditResult = existing.audit;
+        auditRecord = existing;
+      }
     }
 
-    const auditRecord = await auditPersistenceService.saveAudit(businessId, auditResult);
-    if (!auditRecord) {
-      throw new AuditPipelineError(
-        "AUDIT_SAVE_FAILED",
-        "The audit was calculated but could not be saved. It will be retried automatically."
-      );
+    if (!auditResult || !auditRecord) {
+      try {
+        auditResult = await auditEngine.runAudit(enrichedBusiness);
+      } catch (error) {
+        throw new AuditPipelineError(
+          "AUDIT_FAILED",
+          "The audit could not be calculated from this business's data. It will be retried automatically.",
+          error
+        );
+      }
+
+      auditRecord = await auditPersistenceService.saveAudit(businessId, auditResult);
+      if (!auditRecord) {
+        throw new AuditPipelineError(
+          "AUDIT_SAVE_FAILED",
+          "The audit was calculated but could not be saved. It will be retried automatically."
+        );
+      }
     }
 
-    // 4. AI report — the only slow, fallible step. A failure here does not
-    //    discard the audit: the report is regenerated before any email goes
-    //    out (see auditReadinessService).
-    let reportMissing = false;
-    try {
-      const report = await aiReportService.generateAuditReport(enrichedBusiness, auditResult);
-      await auditPersistenceService.saveAIReport(auditRecord.id, report);
-    } catch (error) {
-      reportMissing = true;
-      logger.warn(
-        `[AuditPipeline] AI report failed for ${businessId} (audit kept): ${getErrorMessage(error)}`
-      );
-    }
+    // 4. The AI report is NOT written here any more. It was the single
+    //    slowest step, and inside this job it pushed the whole audit past the
+    //    60s function limit — the reason every audit needed a retry. The
+    //    worker queues a small REPORT job instead (see runReportStage), and
+    //    auditReadinessService regenerates a missing report before any email
+    //    is sent, so the pipeline stays correct meanwhile.
+    const needsReport = !auditRecord.aiReport;
 
     // 5. Pipeline
     await priorityService.recalculatePriorityForBusiness(businessId);
@@ -150,14 +190,84 @@ class AuditPipelineService {
     }
 
     logger.info(
-      `[AuditPipeline] ${enrichedBusiness.name} audited (score ${auditResult.overallScore})${reportMissing ? " — AI report missing" : ""}.`
+      `[AuditPipeline] ${enrichedBusiness.name} audited (score ${auditResult.overallScore})${needsReport ? " — AI report queued as its own job" : ""}.`
     );
 
     return {
       prospectId: prospect?.id ?? null,
       businessName: enrichedBusiness.name,
-      reportMissing,
+      needsReport,
     };
+  }
+
+  /**
+   * The REPORT stage: write the AI report for the business's latest audit.
+   *
+   * A job of one small, predictable size — the deterministic audit already
+   * exists, so this cannot outgrow the function window. Idempotent: when the
+   * report already exists (e.g. written by Re-run Audit) the job completes
+   * without doing anything.
+   */
+  async runReportStage(businessId: string): Promise<{ generated: boolean }> {
+    const business = await persistenceService.getBusinessById(businessId);
+    if (!business) {
+      throw new AuditPipelineError(
+        "BUSINESS_MISSING",
+        "This business is no longer in the database, so there is no audit to report on."
+      );
+    }
+
+    const auditRecord = await auditPersistenceService.getLatestAudit(businessId);
+    if (!auditRecord) {
+      throw new AuditPipelineError(
+        "AUDIT_MISSING",
+        "No audit exists yet for this business, so there is nothing to write a report about."
+      );
+    }
+
+    if (auditRecord.aiReport) {
+      logger.info(
+        `[AuditPipeline] Report for ${business.name} already exists — REPORT job has nothing to do.`
+      );
+      return { generated: false };
+    }
+
+    // Mirror the profile shape the audit stage used: owner notes merged over
+    // the stored enrichment, gaps backfilled. All in-memory, no crawling.
+    const parsedNotes = parseBusinessNotes(business.notes ?? "");
+    const merged = mergeNotesIntoEnrichment(
+      business.enrichment ?? { status: "NOT_STARTED" },
+      parsedNotes
+    );
+    if (business.enrichment?.preferredEmail) {
+      merged.preferredEmail = business.enrichment.preferredEmail;
+    }
+    const profileBusiness = await applyWebsiteAuditBackfill(
+      businessId,
+      { ...business, enrichment: merged },
+      parsedNotes
+    );
+
+    const report = await aiReportService.generateAuditReport(
+      profileBusiness,
+      auditRecord.audit
+    );
+    await auditPersistenceService.saveAIReport(auditRecord.id, report);
+
+    // Same in-app signal the manual /api/audit route sends.
+    const prospect = await prospectPersistenceService.getProspectByBusinessId(businessId);
+    await notificationService.notify({
+      type: "REPORT_READY",
+      title: `Audit report ready: ${business.name}`,
+      body: `Overall score ${auditRecord.audit.overallScore}/100 — open the pipeline to review and send.`,
+      href: prospect ? `/dashboard/pipeline/${prospect.id}` : null,
+      prospectId: prospect?.id ?? null,
+      businessId,
+      dedupeKey: `report-ready:${auditRecord.id}`,
+    });
+
+    logger.info(`[AuditPipeline] AI report written for ${business.name} (REPORT stage).`);
+    return { generated: true };
   }
 }
 

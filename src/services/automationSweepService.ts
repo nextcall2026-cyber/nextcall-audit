@@ -4,6 +4,7 @@ import { followUpAutomationService } from "@/services/followUpAutomationService"
 import { autoSendService, AutoSendReport } from "@/services/autoSendService";
 import { dailyDigestService } from "@/services/dailyDigestService";
 import { notificationService } from "@/services/notificationService";
+import { getScreenshotUploadsCollection } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -27,6 +28,7 @@ export interface AutomationSweepResult {
   followUps: FollowUpSweepReport;
   digest: { sent: boolean };
   prunedNotifications: number;
+  prunedScreenshots: number;
   durationMs: number;
   ran: string[];
   error?: string;
@@ -75,6 +77,7 @@ export async function runAutomationSweep(
     followUps: {},
     digest: { sent: false },
     prunedNotifications: 0,
+    prunedScreenshots: 0,
     durationMs: 0,
     ran: [],
   };
@@ -94,7 +97,9 @@ export async function runAutomationSweep(
 
     if (parts.autoSend) {
       result.ran.push("autoSend");
-      result.autoSend = await autoSendService.runPass();
+      // One email — the send worker's 2-minute cron owns the pacing; the sweep
+      // must never burst-send on top of it.
+      result.autoSend = await autoSendService.runPass({ maxSends: 1 });
     }
     if (parts.digest) {
       result.ran.push("digest");
@@ -103,6 +108,7 @@ export async function runAutomationSweep(
     if (parts.prune) {
       result.ran.push("prune");
       result.prunedNotifications = await notificationService.prune(30);
+      result.prunedScreenshots = await pruneStaleScreenshots();
     }
   } catch (error) {
     result.ok = false;
@@ -119,4 +125,24 @@ export async function runAutomationSweep(
 
   result.durationMs = Date.now() - startedAt;
   return result;
+}
+
+/**
+ * Deletes screenshots nobody picked up — uploads whose job never completed
+ * (DEAD after max retries, or lost in a crash before the business was saved).
+ * Normally the worker deletes each upload right after reading it; this is the
+ * safety net that keeps storage flat.
+ */
+async function pruneStaleScreenshots(hoursOld = 24): Promise<number> {
+  try {
+    const collection = await getScreenshotUploadsCollection();
+    const cutoff = new Date(Date.now() - hoursOld * 60 * 60_000).toISOString();
+    const result = await collection.deleteMany({ createdAt: { $lt: cutoff } });
+    const deleted = result.deletedCount ?? 0;
+    if (deleted > 0) logger.info(`[AutomationSweep] Pruned ${deleted} stale screenshot upload(s).`);
+    return deleted;
+  } catch (error) {
+    logger.warn(`[AutomationSweep] Screenshot prune failed: ${getErrorMessage(error)}`);
+    return 0;
+  }
 }

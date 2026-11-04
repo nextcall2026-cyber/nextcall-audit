@@ -25,25 +25,33 @@ const RESEED_INTERVAL_MS = 60_000;
  * Daily per-provider usage.
  *
  * The source of truth is the outreach collection: every SENT record carries
- * the provider that carried it, so "how many did Brevo send today" survives
- * cold starts, multiple serverless instances and redeploys. That count is
+ * the provider that carried it, so "how many did each provider send today"
+ * survives cold starts, multiple serverless instances and redeploys. That count is
  * cached for a minute and topped up with in-process increments, so a burst of
  * sends does not hit the database for every email.
  *
- * The day boundary is UTC — the same boundary Brevo and Resend reset on.
+ * The day boundary is UTC — the same boundary Mailtrap and Resend reset on.
  */
 export class EmailQuotaService implements QuotaGateway {
   private cache: UsageCache | null = null;
 
   getLimits(): Record<EmailProviderName, number> {
     return {
-      brevo: env.EMAIL_DAILY_LIMIT_BREVO,
+      mailgun: env.EMAIL_DAILY_LIMIT_MAILGUN,
+      mailtop: env.EMAIL_DAILY_LIMIT_MAILTOP,
       resend: env.EMAIL_DAILY_LIMIT_RESEND,
     };
   }
 
   isConfigured(name: EmailProviderName): boolean {
-    return name === "brevo" ? Boolean(env.BREVO_API_KEY) : Boolean(env.RESEND_API_KEY);
+    switch (name) {
+      case "mailgun":
+        return Boolean(env.MAILGUN_API_KEY && env.MAILGUN_DOMAIN);
+      case "mailtop":
+        return Boolean(env.MAILTOP_API_KEY);
+      case "resend":
+        return Boolean(env.RESEND_API_KEY);
+    }
   }
 
   private today(): string {
@@ -63,8 +71,8 @@ export class EmailQuotaService implements QuotaGateway {
       return cached.usage;
     }
 
-    const local = cached?.usage ?? { brevo: 0, resend: 0 };
-    let stored = { brevo: 0, resend: 0 };
+    const local = cached?.usage ?? { mailgun: 0, mailtop: 0, resend: 0 };
+    let stored = { mailgun: 0, mailtop: 0, resend: 0 };
 
     try {
       stored = await outreachPersistenceService.countSentSinceByProvider(this.startOfTodayIso());
@@ -74,7 +82,8 @@ export class EmailQuotaService implements QuotaGateway {
 
     // Never lose an in-process increment to a slightly stale database read.
     const usage = {
-      brevo: Math.max(local.brevo, stored.brevo),
+      mailgun: Math.max(local.mailgun, stored.mailgun),
+      mailtop: Math.max(local.mailtop, stored.mailtop),
       resend: Math.max(local.resend, stored.resend),
     };
 

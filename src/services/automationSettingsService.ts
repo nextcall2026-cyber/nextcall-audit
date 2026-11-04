@@ -1,5 +1,6 @@
 import "server-only";
 
+import { env } from "@/lib/env";
 import { getSettingsCollection } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
@@ -18,7 +19,7 @@ export interface AutomationSettings {
   autoSendEnabled: boolean;
   /** When true nothing is sent — each candidate produces a feed entry instead. */
   dryRun: boolean;
-  /** Hard ceiling on initial emails per calendar day (Brevo 300 + Resend 50). */
+  /** Hard ceiling on initial emails per calendar day (all provider free tiers combined). */
   dailyCap: number;
   /** When false, sending is allowed around the clock. */
   businessHoursEnabled: boolean;
@@ -30,11 +31,13 @@ export interface AutomationSettings {
 
 const SETTINGS_DOC_ID = "automation-settings";
 /**
- * The most a day can carry: Brevo's 300 free emails plus the 50 Resend is
- * allowed to add on top. Anything above this could never actually be sent, so
- * the cap is clamped here rather than letting the automation hit a wall.
+ * The most a day can carry: the sum of the configured per-provider limits
+ * (Mailgun 100 + Mailtop 150 + Resend 50 = 300 on the defaults). Anything
+ * above this could never actually be sent, so the cap is clamped here rather
+ * than letting the automation hit a wall.
  */
-export const MAX_DAILY_CAP = 350;
+export const MAX_DAILY_CAP =
+  env.EMAIL_DAILY_LIMIT_MAILGUN + env.EMAIL_DAILY_LIMIT_MAILTOP + env.EMAIL_DAILY_LIMIT_RESEND;
 export const BUSINESS_HOURS_START = 9;
 export const BUSINESS_HOURS_END = 18;
 

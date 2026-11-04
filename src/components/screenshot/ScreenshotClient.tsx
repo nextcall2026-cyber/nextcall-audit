@@ -7,17 +7,18 @@ import { Check, Image as ImageIcon, Loader2, Plus, RefreshCw, X } from "lucide-r
 import { logger } from "@/lib/logger";
 import { useToast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/errors";
+import { readScreenshotTextWithDeadline } from "@/lib/ocrClient";
 
 /**
  * Screenshot ingest + queue.
  *
  * The operator drops the Google listing screenshot (and the Facebook About one
  * when the business has a page), presses one button, and moves on to the next
- * business. Everything after that happens in the background — the audit worker
- * picks the job up within a minute.
+ * business. Queueing is INSTANT and spends zero AI: the images are compressed
+ * in the browser and stored, and the audit worker reads them in the
+ * background with the one shared AI chain.
  *
- * Nothing here waits for the audit. The only slow part is reading the two
- * images (~6-8s), and that is what the button spinner covers.
+ * Nothing here waits for the audit or for any model.
  */
 
 interface JobRow {
@@ -25,6 +26,8 @@ interface JobRow {
   businessName: string;
   businessId: string;
   status: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "DEAD";
+  /** "REPORT" rows are the small follow-up job that writes the AI report. */
+  stage?: "AUDIT" | "REPORT";
   attempts: number;
   maxAttempts: number;
   lastError: string | null;
@@ -64,18 +67,47 @@ const STATUS_STYLES: Record<JobRow["status"], { label: string; className: string
   DEAD: { label: "Failed", className: "bg-red-100 text-red-700" },
 };
 
+/**
+ * Shrinks a pasted screenshot before upload: max 1600px on the long edge,
+ * JPEG. Text screenshots stay perfectly readable for the vision model, and
+ * the stored base64 lands far below the database's document limits — which
+ * is what makes instant queueing safe.
+ */
+async function compressForUpload(file: File): Promise<File> {
+  try {
+    if (!file.type.startsWith("image/")) return file;
+    const bitmap = await createImageBitmap(file);
+    const maxDim = 1600;
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size <= 400_000) return file;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.82)
+    );
+    if (!blob) return file;
+    return new File([blob], `${file.name.replace(/\.[^.]+$/, "")}.jpg`, { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
+}
+
 export default function ScreenshotClient() {
   const toast = useToast();
 
   const [files, setFiles] = useState<Record<Slot, File | null>>({ google: null, facebook: null });
   const [previews, setPreviews] = useState<Record<Slot, string | null>>({ google: null, facebook: null });
   const [submitting, setSubmitting] = useState(false);
+  const [busyNote, setBusyNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lastQueued, setLastQueued] = useState<{
-    name: string;
-    emailFound: boolean;
-    facebookUsed: boolean;
-  } | null>(null);
+  const [queuedFlash, setQueuedFlash] = useState(false);
 
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [stats, setStats] = useState<QueueStats>(EMPTY_STATS);
@@ -130,7 +162,7 @@ export default function ScreenshotClient() {
     }
 
     setError(null);
-    setLastQueued(null);
+    setQueuedFlash(false);
 
     setFiles((prev) => ({ ...prev, [slot]: file }));
     setPreviews((prev) => {
@@ -189,9 +221,29 @@ export default function ScreenshotClient() {
     setError(null);
 
     try {
+      // Compress in the browser first: a 1600px JPEG is perfectly readable
+      // for the vision model and lands far below the database's document
+      // limits, which is what makes instant queueing safe.
+      const [googleFile, facebookFile] = await Promise.all([
+        compressForUpload(files.google!),
+        files.facebook ? compressForUpload(files.facebook) : Promise.resolve(null),
+      ]);
+
+      // Zero-AI OCR in the operator's browser: pull the listing text out of
+      // the screenshots so the worker can skip the AI vision read entirely.
+      // Best-effort — a failure here leaves the images as-is for the AI.
+      setBusyNote("Reading the screenshots with browser OCR (no AI)...");
+      const [googleText, facebookText] = await Promise.all([
+        readScreenshotTextWithDeadline(googleFile),
+        facebookFile ? readScreenshotTextWithDeadline(facebookFile) : Promise.resolve(null),
+      ]);
+      setBusyNote(null);
+
       const formData = new FormData();
-      formData.append("google", files.google!);
-      if (files.facebook) formData.append("facebook", files.facebook);
+      formData.append("google", googleFile);
+      if (facebookFile) formData.append("facebook", facebookFile);
+      if (googleText.ok && googleText.text) formData.append("googleOcr", googleText.text);
+      if (facebookText?.ok && facebookText.text) formData.append("facebookOcr", facebookText.text);
 
       const response = await fetch("/api/businesses/manual", { method: "POST", body: formData });
       const data = await response.json().catch(() => ({}));
@@ -210,16 +262,11 @@ export default function ScreenshotClient() {
         return;
       }
 
-      setLastQueued({
-        name: data.businessName,
-        emailFound: Boolean(data.emailFound),
-        facebookUsed: Boolean(data.facebookUsed),
-      });
-      if (data.warning) {
-        toast.warning("Queued — but check the email", data.warning);
-      } else {
-        toast.success("Added to the queue", `${data.businessName} will be audited in the background.`);
-      }
+      setQueuedFlash(true);
+      toast.success(
+        "Added to the queue",
+        "Queueing is instant — the AI reads the screenshots and builds the audit in the background."
+      );
       resetForm();
       void loadQueue();
     } catch (err) {
@@ -252,8 +299,9 @@ export default function ScreenshotClient() {
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted-foreground">
         Drop the Google listing screenshot — plus the Facebook About section when the business has
-        one — then press <span className="font-medium text-foreground">Add to queue</span>. The audit
-        runs in the background, so you can keep adding businesses without waiting.
+        one — then press <span className="font-medium text-foreground">Add to queue</span>. Queueing
+        is instant and spends no AI; one AI worker reads the screenshots and finishes everything in
+        the background, and a send worker emails one audit every 2 minutes.
       </p>
 
       {/* Add a business */}
@@ -339,18 +387,14 @@ export default function ScreenshotClient() {
             </div>
           )}
 
-          {lastQueued && (
+          {queuedFlash && (
             <div className="mt-4 flex flex-wrap items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
               <Check className="h-3.5 w-3.5" />
-              <span className="font-medium">{lastQueued.name}</span>
+              <span className="font-medium">Queued instantly — zero AI spent here.</span>
               <span>
-                is in the queue{lastQueued.emailFound ? " · email found" : " · no email found yet"}
+                The worker reads the screenshots, checks duplicates and builds the audit in the
+                background.
               </span>
-              {!lastQueued.facebookUsed && (
-                <span className="text-emerald-700/80">
-                  · no Facebook screenshot, so the website will be searched for an email
-                </span>
-              )}
             </div>
           )}
 
@@ -359,7 +403,7 @@ export default function ScreenshotClient() {
               {submitting ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Reading screenshots...
+                  {busyNote ?? "Queueing..."}
                 </>
               ) : (
                 <>
@@ -417,6 +461,11 @@ export default function ScreenshotClient() {
                     <div className="flex min-w-0 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-medium text-foreground">{job.businessName}</span>
+                        {job.stage === "REPORT" && (
+                          <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-blue-700">
+                            report
+                          </span>
+                        )}
                         <span
                           className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${style.className}`}
                         >

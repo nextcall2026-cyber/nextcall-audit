@@ -28,6 +28,7 @@ export async function GET() {
         businessName: job.businessName,
         businessId: job.businessId,
         status: job.status,
+        stage: job.stage,
         attempts: job.attempts,
         maxAttempts: job.maxAttempts,
         lastError: job.lastError,

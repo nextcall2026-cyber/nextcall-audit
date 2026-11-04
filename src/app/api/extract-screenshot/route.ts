@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
         maxOutputTokens: 1000,
         json: true,
         thinking: "off",
-        model: AI_CHAINS.visionListing,
+        model: AI_CHAINS.main,
       });
 
       const raw = llm.text;

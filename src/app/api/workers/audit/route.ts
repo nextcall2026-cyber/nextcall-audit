@@ -6,6 +6,16 @@ import { getErrorMessage } from "@/lib/errors";
 import { warmRouter } from "@/lib/ai/warmup";
 import { jobQueueService } from "@/services/jobQueueService";
 import { auditPipelineService, AuditPipelineError } from "@/services/auditPipelineService";
+import {
+  extractFromScreenshot,
+  ExtractedScreenshotFields,
+  ScreenshotError,
+  ScreenshotKind,
+} from "@/services/screenshotExtractor";
+import { parseGoogleListingText, parseFacebookListingText, ocrFieldsUsable } from "@/lib/ocrParsing";
+import { saveBusinessFromScreenshots } from "@/services/businessIngestService";
+import { getScreenshotUploadsCollection } from "@/lib/db";
+import { AuditJob, ScreenshotUpload } from "@/types";
 import { notificationService } from "@/services/notificationService";
 
 /**
@@ -23,8 +33,13 @@ import { notificationService } from "@/services/notificationService";
  *
  * One pass:
  *   1. reclaim jobs whose worker died (nothing is ever stranded)
- *   2. claim up to MAX_JOBS jobs, one at a time, inside a time budget
+ *   2. claim jobs (an AUDIT, then its follow-up REPORT) one at a time, but
+ *      only while the job still fits in the remaining function window
  *   3. mark each DONE or schedule a retry
+ *
+ * The AI report runs as its own small REPORT job instead of inside the audit
+ * job: it was the one step that could outgrow the 60s function limit, and a
+ * function killed mid-job is what made every audit cost a retry.
  *
  * Add `?wait=1` to run the pass synchronously and get the summary back — handy
  * for a manual test, never used by the scheduler.
@@ -33,11 +48,17 @@ import { notificationService } from "@/services/notificationService";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Two audits per pass — each is 15–25s, so this fits a 60s invocation. */
+/** Two jobs per pass — a screenshot job adds an AI read on top of the 15–25s
+ *  pipeline; the window below gates how many actually start. */
 const MAX_JOBS_PER_PASS = 2;
 
-/** Stop claiming new jobs after this, leaving room to write the result. */
-const TIME_BUDGET_MS = 45_000;
+/** The Vercel function dies at maxDuration (60s); keep a margin for the final
+ *  database writes. Everything a pass starts must also end inside this. */
+const FUNCTION_BUDGET_MS = 55_000;
+
+/** A job is only claimed when at least this much room is left — every stage
+ *  (vision read + crawl + audit, or a report call) fits inside it. */
+const JOB_RESERVE_MS = 45_000;
 
 interface PassSummary {
   done: number;
@@ -53,8 +74,17 @@ async function runPass(workerId: string): Promise<PassSummary> {
   // This pass runs every minute, which makes it the natural keep-alive for the
   // router: a free Render instance sleeps after ~15 minutes idle and then takes
   // 60-95s to answer, which is longer than an upload can wait. A cheap ping
-  // here means the operator's next screenshot is read in ~1.5s.
-  await warmRouter(8_000);
+  // here means the operator's next screenshot is read in ~1.5s. The ping runs
+  // in the background; the pass waits for it only right before the first AI
+  // call — the queue bookkeeping in between needs no AI.
+  const warmPromise = warmRouter(8_000);
+  let warmAwaited = false;
+  const awaitWarm = async (): Promise<void> => {
+    if (!warmAwaited) {
+      warmAwaited = true;
+      await warmPromise;
+    }
+  };
 
   const requeued = await jobQueueService.requeueStale();
 
@@ -62,19 +92,67 @@ async function runPass(workerId: string): Promise<PassSummary> {
   let failed = 0;
   const results: PassSummary["results"] = [];
 
-  while (done + failed < MAX_JOBS_PER_PASS && Date.now() - startedAt < TIME_BUDGET_MS) {
+  while (done + failed < MAX_JOBS_PER_PASS) {
+    // Only claim a job that still has room to finish: the function dies at
+    // maxDuration, and a job killed mid-flight wastes an attempt (its lease
+    // is only freed after 3 minutes). The first job is claimed right away; a
+    // second one only while the reserve still fits.
+    const remainingMs = FUNCTION_BUDGET_MS - (Date.now() - startedAt);
+    if (remainingMs < JOB_RESERVE_MS) break;
+
     const job = await jobQueueService.claimNext(workerId);
     if (!job) break;
 
     try {
-      const result = await auditPipelineService.run(job.businessId);
+      // Report-stage job: the deterministic audit already exists — write its
+      // AI report and finish. Text-only, so it always fits the window.
+      if (job.stage === "REPORT") {
+        await awaitWarm();
+        const { generated } = await auditPipelineService.runReportStage(job.businessId);
+        await jobQueueService.complete(job.id);
+        done += 1;
+        results.push({
+          job: job.businessName,
+          status: "DONE",
+          ...(generated ? { message: "AI report ready" } : {}),
+        });
+        continue;
+      }
+
+      // Screenshot-stage job: read the stored uploads with AI, create the
+      // business, then run the pipeline on it. Returns null for a duplicate
+      // (the job is completed with a note instead).
+      const businessId = await ensureBusinessFromScreenshots(job, awaitWarm);
+
+      if (!businessId) {
+        done += 1;
+        results.push({
+          job: job.businessName,
+          status: "DONE",
+          message: "Duplicate — already in the app, nothing queued",
+        });
+        continue;
+      }
+
+      const result = await auditPipelineService.run(businessId);
       await jobQueueService.complete(job.id);
       done += 1;
       results.push({
         job: job.businessName,
         status: "DONE",
-        ...(result.reportMissing ? { message: "AI report missing — regenerated before sending" } : {}),
+        ...(result.needsReport ? { message: "Audit ready — AI report queued" } : {}),
       });
+
+      // The AI report runs as its own small job in this same queue — picked up
+      // right away if the window still fits, otherwise by the next pass. That
+      // is what keeps every single job inside the function's time limit.
+      if (result.needsReport) {
+        await jobQueueService.enqueue({
+          businessId,
+          businessName: job.businessName,
+          stage: "REPORT",
+        });
+      }
     } catch (error) {
       const pipelineError =
         error instanceof AuditPipelineError
@@ -158,4 +236,160 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   const stats = await jobQueueService.stats();
   return NextResponse.json({ worker: "audit", stats });
+}
+
+/**
+ * Screenshot-stage jobs: read the stored uploads — browser OCR first, AI
+ * vision only as a fallback, both reads in parallel — then create the
+ * business and stamp it on the job.
+ *
+ * Resumable by design: once the business is saved (and stamped on the job)
+ * the uploads are deleted, so a retry skips straight to the pipeline instead
+ * of re-reading the same images. A duplicate completes the job as DONE and
+ * returns null.
+ */
+async function ensureBusinessFromScreenshots(
+  job: AuditJob,
+  awaitWarm: () => Promise<void>
+): Promise<string | null> {
+  const screenshots = job.screenshots;
+
+  if (!screenshots) return job.businessId || null;
+
+  // Resumed run: the business already exists, the pipeline continues.
+  if (job.businessId) return job.businessId;
+
+  const collection = await getScreenshotUploadsCollection();
+  const ids = screenshots.facebookId
+    ? [screenshots.googleId, screenshots.facebookId]
+    : [screenshots.googleId];
+  const docs = (await collection
+    .find({ id: { $in: ids } })
+    .toArray()) as unknown as ScreenshotUpload[];
+  const google = docs.find((d) => d.kind === "google");
+  const facebook = docs.find((d) => d.kind === "facebook");
+
+  if (!google) {
+    throw new AuditPipelineError(
+      "SCREENSHOT_MISSING",
+      "The stored screenshot could not be found any more. Add the business again."
+    );
+  }
+
+  // Zero-AI read first: the browser OCR text that came with the upload. When
+  // it carries a believable name the vision call is skipped entirely — this
+  // is what keeps a slow or rate-limited AI chain from stalling the queue.
+  const googleOcr = google.ocrText ? parseGoogleListingText(google.ocrText) : null;
+  const facebookOcr = facebook?.ocrText ? parseFacebookListingText(facebook.ocrText) : null;
+
+  const googleOcrUsable = Boolean(googleOcr && ocrFieldsUsable(googleOcr));
+  const facebookOcrUsable = Boolean(facebookOcr && (facebookOcr.email || facebookOcr.name));
+
+  if (googleOcrUsable) {
+    logger.info(
+      `[Worker /audit] OCR read of the Google screenshot "${googleOcr?.name}" — vision call skipped (0 AI).`
+    );
+  }
+  if (facebook && facebookOcrUsable) {
+    logger.info(
+      `[Worker /audit] OCR read of the Facebook screenshot${
+        facebookOcr?.email ? ` — email ${facebookOcr.email}` : ""
+      } — vision call skipped (0 AI).`
+    );
+  }
+  if (google.ocrText && !googleOcrUsable) {
+    logger.info("[Worker /audit] OCR text unusable — falling back to the AI vision read.");
+  }
+
+  // Whatever still needs vision runs as ONE parallel step — Google is
+  // required, Facebook is best-effort — instead of one read after the other.
+  // Half the wall time of the old sequential reads, same failure semantics.
+  const visionRead = async (
+    kind: ScreenshotKind,
+    upload: ScreenshotUpload,
+    timeoutMs: number
+  ): Promise<{ fields: ExtractedScreenshotFields | null; error: unknown }> => {
+    await awaitWarm();
+    try {
+      return {
+        fields: await extractFromScreenshot(
+          kind,
+          { bytes: Buffer.from(upload.dataBase64, "base64"), mimeType: upload.mimeType },
+          { timeoutMs }
+        ),
+        error: null,
+      };
+    } catch (error) {
+      return { fields: null, error };
+    }
+  };
+
+  const [googleRead, facebookRead] = await Promise.all([
+    !googleOcrUsable
+      ? visionRead("google", google, 30_000)
+      : Promise.resolve({ fields: googleOcr, error: null as unknown }),
+    facebook && !facebookOcrUsable
+      ? visionRead("facebook", facebook, 25_000)
+      : Promise.resolve({
+          fields:
+            facebookOcrUsable && facebookOcr
+              ? { ...facebookOcr, phone: null, website: null, address: null, rating: null, reviewCount: null, category: null }
+              : null,
+          error: null as unknown,
+        }),
+  ]);
+
+  let googleFields: ExtractedScreenshotFields | null = googleRead.fields;
+  if (!googleOcrUsable && !googleRead.fields) {
+    const error = googleRead.error;
+    if (error instanceof ScreenshotError) {
+      throw new AuditPipelineError("SCREENSHOT_READ_FAILED", error.userMessage, error);
+    }
+    throw error ?? new Error("The Google screenshot read failed without an error.");
+  }
+  if (!googleOcrUsable) {
+    googleFields = googleRead.fields;
+  }
+
+  // Facebook is best-effort: no page (or an unreadable one) still leaves a
+  // runnable audit — the website crawl gets a chance at the email instead.
+  let facebookFields: ExtractedScreenshotFields | null = facebookRead.fields;
+  if (facebook && !facebookOcrUsable && !facebookRead.fields) {
+    logger.warn(
+      `[Worker /audit] Facebook read failed, continuing without it: ${getErrorMessage(facebookRead.error)}`
+    );
+    facebookFields = null;
+  }
+
+  const name = googleFields?.name?.trim() || facebookFields?.name?.trim() || "";
+  if (!name) {
+    throw new AuditPipelineError(
+      "SCREENSHOT_UNREADABLE",
+      "The business name could not be read from the screenshots. Take the Google screenshot again with the name clearly visible, then add the business again."
+    );
+  }
+
+  const { business, duplicateOf } = await saveBusinessFromScreenshots(googleFields, facebookFields);
+
+  // Delete the uploads before the pipeline: the reads are done, and this
+  // keeps a failed pipeline retry from re-reading (and re-paying for) them.
+  await collection.deleteMany({ id: { $in: docs.map((d) => d.id) } });
+  await jobQueueService.attachBusiness(job.id, business.id, business.name);
+  job.businessId = business.id;
+  job.businessName = business.name;
+
+  if (duplicateOf) {
+    await notificationService.notify({
+      type: "AUTOMATION_ISSUE",
+      title: `Duplicate skipped: ${business.name}`,
+      body: "These screenshots matched a business that is already in your app, so no second audit was built.",
+      href: "/dashboard/screenshot",
+      businessId: duplicateOf.id,
+      dedupeKey: `screenshot-duplicate:${duplicateOf.id}`,
+    });
+    await jobQueueService.complete(job.id);
+    return null;
+  }
+
+  return business.id;
 }

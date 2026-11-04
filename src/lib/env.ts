@@ -32,17 +32,35 @@ const envSchema = z.object({
   //Email Outreach (Resend) 
   RESEND_WEBHOOK_SECRET: z.string().optional(), // NEW
 
-  // Email Outreach (Brevo) — primary sender, Resend becomes the overflow.
-  // The key is a server secret: never expose it with NEXT_PUBLIC_.
-  BREVO_API_KEY: z.string().optional(),
-  /** "Name <email@domain>" or a bare address. Falls back to RESEND_FROM_EMAIL. */
-  BREVO_FROM_EMAIL: z.string().optional(),
-  /** Shared secret Brevo echoes back on webhook calls (?token=...). */
-  BREVO_WEBHOOK_TOKEN: z.string().optional(),
 
-  // Daily capacity per provider. Brevo's free tier allows 300/day and the
-  // plan caps Resend at 50, so one day can carry 350 emails in total.
-  EMAIL_DAILY_LIMIT_BREVO: z.coerce.number().int().nonnegative().optional().default(300),
+  // Email Outreach (Mailgun) — first sender of the day, Mailtop and Resend
+  // follow. The keys are server secrets: never expose them with NEXT_PUBLIC_.
+  MAILGUN_API_KEY: z.string().optional(),
+  /** Sending domain registered in Mailgun, e.g. getnextcall.com. */
+  MAILGUN_DOMAIN: z.string().optional(),
+  /** API base. US accounts: https://api.mailgun.net — EU: https://api.eu.mailgun.net. */
+  MAILGUN_BASE_URL: z.string().url().optional(),
+  /** "Name <email@domain>" or a bare address. Falls back to RESEND_FROM_EMAIL. */
+  MAILGUN_FROM_EMAIL: z.string().optional(),
+
+  // Email Outreach (Mailtop — Mailtrap.io) — second sender of the day.
+  MAILTOP_API_KEY: z.string().optional(),
+  /** Mailtrap sending API base. Default lives in the service. */
+  MAILTOP_BASE_URL: z.string().url().optional(),
+  /** Falls back to RESEND_FROM_EMAIL. */
+  MAILTOP_FROM_EMAIL: z.string().optional(),
+
+  // Webhook signing secrets (delivery / bounce / spam / unsubscribe events).
+  // Mailgun: Settings → API Keys → Webhook Signing Key. Mailtrap: the signing
+  // secret is shown when you create the webhook in Settings → Webhooks.
+  MAILGUN_WEBHOOK_SIGNING_KEY: z.string().optional(),
+  MAILTRAP_WEBHOOK_SIGNING_KEY: z.string().optional(),
+
+  // Daily capacity per provider. Free tiers: Mailgun 100/day, Mailtrap
+  // (Mailtop) 150/day (4,000/month), and the plan caps Resend at 50 — so one
+  // day can carry 300 emails in total.
+  EMAIL_DAILY_LIMIT_MAILGUN: z.coerce.number().int().nonnegative().optional().default(100),
+  EMAIL_DAILY_LIMIT_MAILTOP: z.coerce.number().int().nonnegative().optional().default(150),
   EMAIL_DAILY_LIMIT_RESEND: z.coerce.number().int().nonnegative().optional().default(50),
 
   // Authentication

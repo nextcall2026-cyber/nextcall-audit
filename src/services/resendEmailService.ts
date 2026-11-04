@@ -15,8 +15,8 @@ import { EmailProviderName } from "@/types";
 /**
  * Resend — the overflow sender.
  *
- * Resend carries 50 of the 350 daily emails: everything Brevo could not take
- * once its 300/day allowance is spent. The call itself is unchanged from the
+ * Resend carries the last 50 daily emails: whatever Mailgun (100/day) and
+ * Mailtop (150/day) could not take. The call itself is unchanged from the
  * original single-provider implementation (same payload, same Idempotency-Key
  * header), only wrapped in the provider interface so the router can pick it.
  */

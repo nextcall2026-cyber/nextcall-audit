@@ -388,11 +388,15 @@ export type OutreachStatus = 'PENDING' | 'SENT' | 'FAILED';
 export type OutreachType = 'INITIAL' | 'FOLLOW_UP';
 
 /**
- * The providers the app can send through. Brevo is used first (300/day on the
- * free tier), Resend is the overflow (50/day), so one day's capacity is the
- * sum of both. Keep this list in send order.
+ * The providers the app can send through. Mailgun goes first (100/day on the
+ * free tier), Mailtop — Mailtrap.io — is the second free tier (150/day), and
+ * Resend is the overflow (50/day), so one day's capacity is the sum of all
+ * three. Keep this list in send order.
+ *
+ * Records stored during the retired Brevo era may still carry
+ * provider: "brevo" in the database; the quota counter ignores those.
  */
-export type EmailProviderName = 'brevo' | 'resend';
+export type EmailProviderName = 'mailgun' | 'mailtop' | 'resend';
 export type OutreachStage = 0 | 1 | 2 | 3 | 4; // 0=Initial, 1-3=Followups, 4=CloseLoop
 
 export type CTAType = 
@@ -419,7 +423,7 @@ export interface OutreachRecord {
   angle: string | null; 
   /** Which provider actually carried this email. Legacy records: undefined = Resend. */
   provider?: EmailProviderName | null;
-  /** Provider-side message id (Resend id, Brevo messageId). */
+  /** Provider-side message id (Mailgun id, Mailtrap message id, Resend id). */
   providerMessageId?: string | null;
   resendMessageId: string | null;
   status: OutreachStatus;
@@ -443,8 +447,8 @@ export interface FollowUpDraft {
 // JOB QUEUE (background workers)
 // ==========================================
 
-/** What a queued job has to do. Only audits exist today. */
-export type AuditJobStage = 'AUDIT';
+/** What a queued job has to do. AUDIT builds the audit; REPORT writes its AI report. */
+export type AuditJobStage = 'AUDIT' | 'REPORT';
 
 export type AuditJobStatus =
   /** Waiting for a worker. */
@@ -460,9 +464,19 @@ export type AuditJobStatus =
 
 export interface AuditJob {
   id: string;
+  /**
+   * Set once the screenshots have been read and the business saved. A
+   * screenshot-stage job starts without one; legacy and pipeline jobs always
+   * carry it.
+   */
   businessId: string;
   /** Shown in the queue panel without a second database read. */
   businessName: string;
+  /**
+   * Screenshot-stage job: the ingest stored these uploads and the worker
+   * still has to read them with AI — nothing runs at queue time. null after.
+   */
+  screenshots?: { googleId: string; facebookId: string | null } | null;
   stage: AuditJobStage;
   status: AuditJobStatus;
   attempts: number;
@@ -479,6 +493,23 @@ export interface AuditJob {
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;
+}
+
+/** One pasted screenshot stored at queue time; deleted after its text has been read. */
+export interface ScreenshotUpload {
+  id: string;
+  kind: 'google' | 'facebook';
+  mimeType: string;
+  /** Base64 of the image — kept only until the read (OCR or vision). */
+  dataBase64: string;
+  bytes: number;
+  /**
+   * Raw text the operator's browser OCR pulled out of this screenshot at
+   * paste time. Present only when OCR succeeded; the AI vision read is then
+   * skipped entirely (the fields are parsed straight from this text).
+   */
+  ocrText?: string;
+  createdAt: string;
 }
 
 // ==========================================

@@ -40,11 +40,12 @@ export interface AutoSendReport {
 /**
  * How many initial emails one pass may send.
  *
- * On a serverless host a pass has to finish inside one invocation (60s), and
- * each send renders a PDF — so the queue drains in batches instead of being
- * cut off half-way through. The next pass continues 15 minutes later.
+ * ONE. The send worker is invoked every 2 minutes and sends a single email —
+ * a slow, steady drip that is gentle on the providers' rate limits and keeps
+ * the pipeline moving around the clock. The 2-minute cron is the pacing; the
+ * per-provider daily quotas are the ceiling.
  */
-export const MAX_SENDS_PER_PASS = 15;
+export const MAX_SENDS_PER_PASS = 1;
 
 /**
  * AI reports generated inside one pass. Each is an LLM call, so the pass stays
@@ -64,9 +65,8 @@ export const MAX_AI_FAILURES_PER_PASS = 2;
  * a 429, a rate limit) fails every remaining prospect too, so the pass stops
  * instead of burning a PDF render per attempt.
  *
- * Rejected credentials and Brevo's "unrecognised IP address" guard count as
- * well: they are not per-prospect problems, and every retry would fail the
- * same way.
+ * Rejected credentials count as well: they are not per-prospect problems, and
+ * every retry would fail the same way.
  */
 export function isProviderLimitError(error: string | null | undefined): boolean {
   if (!error) return false;
@@ -76,7 +76,8 @@ export function isProviderLimitError(error: string | null | undefined): boolean 
 }
 
 class AutoSendService {
-  async runPass(): Promise<AutoSendReport> {
+  async runPass(options: { maxSends?: number } = {}): Promise<AutoSendReport> {
+    const maxSends = Math.max(0, options.maxSends ?? MAX_SENDS_PER_PASS);
     const settings = await automationSettingsService.getSettingsOrDefaults();
 
     if (!settings.autoSendEnabled) {
@@ -138,7 +139,7 @@ class AutoSendService {
     for (const prospect of candidates) {
       if (remaining <= 0) break;
 
-      if (sent >= MAX_SENDS_PER_PASS) {
+      if (sent >= maxSends) {
         passBudgetReached = true;
         break;
       }
@@ -198,7 +199,7 @@ class AutoSendService {
           continue;
         }
 
-        // A provider-wide limit (both Brevo and Resend out of daily quota, or
+        // A provider-wide limit (every provider out of daily quota, or
         // a rate limit) will fail every remaining prospect too, and each
         // attempt costs a PDF render and a FAILED record. Stop the pass and
         // retry after the quotas reset.
@@ -255,7 +256,7 @@ class AutoSendService {
       candidates: candidates.length,
       sent,
       skipped: passBudgetReached
-        ? `${MAX_SENDS_PER_PASS} per pass — ${Math.max(0, candidates.length - sent)} still queued for the next pass`
+        ? `${maxSends} per pass — ${Math.max(0, candidates.length - sent)} still queued for the next pass`
         : "",
     };
   }

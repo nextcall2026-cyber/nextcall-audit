@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "crypto";
-import { AuditJob, AuditJobStatus } from "@/types";
+import { AuditJob, AuditJobStage, AuditJobStatus } from "@/types";
 import { getAuditJobsCollection } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
@@ -35,8 +35,17 @@ export const MAX_ATTEMPTS = 3;
 export const RETRY_DELAYS_MS = [0, 60_000, 120_000];
 
 export interface EnqueueInput {
-  businessId: string;
-  businessName: string;
+  /** Present on pipeline jobs; screenshot-stage jobs queue without one. */
+  businessId?: string;
+  businessName?: string;
+  /**
+   * Screenshot-stage job: the uploads are already stored and the worker has
+   * to read them (no AI runs at queue time). businessId/businessName are
+   * filled in after the read via attachBusiness().
+   */
+  screenshots?: { googleId: string; facebookId: string | null };
+  /** Defaults to AUDIT. A REPORT job only writes the AI report for an existing audit. */
+  stage?: AuditJobStage;
 }
 
 class JobQueueService {
@@ -48,24 +57,34 @@ class JobQueueService {
     try {
       const collection = await getAuditJobsCollection();
 
-      const existing = await collection.findOne({
-        businessId: input.businessId,
-        status: { $in: ["QUEUED", "RUNNING"] },
-      });
+      const stage = input.stage ?? "AUDIT";
 
-      if (existing) {
-        logger.info(
-          `[JobQueue] ${input.businessName} is already queued (${(existing as unknown as AuditJob).id}); not adding again.`
-        );
-        return existing as unknown as AuditJob;
+      // A double-click must not audit the same business twice. Screenshot
+      // jobs have no business yet — their duplicate check happens after the
+      // worker has read the screenshots. The stage is part of the key: an
+      // AUDIT job and its follow-up REPORT job legitimately coexist.
+      if (input.businessId) {
+        const existing = await collection.findOne({
+          businessId: input.businessId,
+          stage,
+          status: { $in: ["QUEUED", "RUNNING"] },
+        });
+
+        if (existing) {
+          logger.info(
+            `[JobQueue] ${input.businessName} is already queued (${(existing as unknown as AuditJob).id}); not adding again.`
+          );
+          return existing as unknown as AuditJob;
+        }
       }
 
       const now = new Date().toISOString();
       const job: AuditJob = {
         id: randomUUID(),
-        businessId: input.businessId,
-        businessName: input.businessName,
-        stage: "AUDIT",
+        businessId: input.businessId ?? "",
+        businessName: input.businessName ?? "New screenshot",
+        screenshots: input.screenshots ?? null,
+        stage,
         status: "QUEUED",
         attempts: 0,
         maxAttempts: MAX_ATTEMPTS,
@@ -145,6 +164,24 @@ class JobQueueService {
       logger.info(`[JobQueue] Job ${jobId} finished.`);
     } catch (error) {
       logger.error(`[JobQueue] Complete failed for ${jobId}:`, getErrorMessage(error));
+    }
+  }
+
+  /**
+   * Screenshot-stage jobs: stamps the business the worker just created from
+   * the uploads, so a retry resumes at the pipeline instead of reading the
+   * screenshots again.
+   */
+  async attachBusiness(jobId: string, businessId: string, businessName: string): Promise<void> {
+    try {
+      const collection = await getAuditJobsCollection();
+      await collection.updateOne(
+        { id: jobId },
+        { $set: { businessId, businessName, updatedAt: new Date().toISOString() } }
+      );
+      logger.info(`[JobQueue] Job ${jobId} attached to business ${businessId}.`);
+    } catch (error) {
+      logger.warn(`[JobQueue] attachBusiness failed for ${jobId}: ${getErrorMessage(error)}`);
     }
   }
 
