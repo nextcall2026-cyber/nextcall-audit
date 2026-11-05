@@ -33,6 +33,8 @@ export async function GET() {
         maxAttempts: job.maxAttempts,
         lastError: job.lastError,
         note: job.note ?? null,
+        phase: job.phase ?? null,
+        engine: job.engine ?? null,
         createdAt: job.createdAt,
         finishedAt: job.finishedAt,
         /** Queued but waiting on a retry delay. */

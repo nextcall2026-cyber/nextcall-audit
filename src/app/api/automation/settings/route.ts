@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import {
   automationSettingsService,
-  startOfDayIso,
+  nextUtcResetIso,
+  nextUtcResetLabel,
+  startOfUtcDayIso,
   MAX_DAILY_CAP,
 } from "@/services/automationSettingsService";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
@@ -12,12 +14,12 @@ import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 
 /**
- * How much of today's allowance has been used. Counted from real SENT outreach
- * records (initial emails + follow-ups), from local midnight in the configured
- * timezone — the same window the send cap uses.
+ * How much of the provider allowance has been used. Counted from real SENT
+ * outreach records (initial emails + follow-ups), from 00:00 UTC — the same
+ * window the send cap uses and the providers reset on.
  */
 async function usageFor(settings: { timezone: string; dailyCap: number }) {
-  const dayStart = startOfDayIso(settings.timezone);
+  const dayStart = startOfUtcDayIso();
   const counts = await outreachPersistenceService.countSentSinceByStage(dayStart);
   const runState = await automationRunLogService.getState();
   return {
@@ -27,6 +29,9 @@ async function usageFor(settings: { timezone: string; dailyCap: number }) {
     dailyCap: settings.dailyCap,
     timezone: settings.timezone,
     dayStart,
+    dayBoundary: "UTC" as const,
+    capResetsAt: nextUtcResetIso(),
+    capResetLabel: nextUtcResetLabel(settings.timezone),
     lastRunAt: runState.lastRunAt,
     lastRunResult: runState.lastResult,
     perPassLimit: MAX_SENDS_PER_PASS,

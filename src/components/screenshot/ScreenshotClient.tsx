@@ -2,20 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Check, Image as ImageIcon, Loader2, Plus, RefreshCw, X } from "lucide-react";
+import { Cog, Image as ImageIcon, Loader2, Plus, RefreshCw, X } from "lucide-react";
 import { logger } from "@/lib/logger";
 import { useToast } from "@/components/ui/toast";
 import { getErrorMessage } from "@/lib/errors";
 
 /**
- * Screenshot ingest + queue.
+ * Screenshot ingest + queue — rendered as the outreach machine's console.
  *
  * The operator drops the Google listing screenshot (and the Facebook About one
- * when the business has a page), presses one button, and moves on to the next
- * business. Queueing is INSTANT and spends zero AI: the images are compressed
- * in the browser and stored, and the audit worker reads them in the
- * background with the one shared AI chain.
+ * when the business has a page). Both boxes filled = auto-queue. The worker
+ * reads the screenshots (NVIDIA nemotron-VL), checks duplicates, crawls the
+ * website, scores the audit and hands the AI report to a queued job — and the
+ * console shows every one of those stages live.
  *
  * Nothing here waits for the audit or for any model.
  */
@@ -27,6 +26,10 @@ interface JobRow {
   status: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "DEAD";
   /** "REPORT" rows are the small follow-up job that writes the AI report. */
   stage?: "AUDIT" | "REPORT";
+  /** Live machine phase while RUNNING (VISION READ, CRAWL, ...). */
+  phase?: string | null;
+  /** Which AI engine served this job (nvidia / grok / router). */
+  engine?: string | null;
   attempts: number;
   maxAttempts: number;
   lastError: string | null;
@@ -45,28 +48,66 @@ interface QueueStats {
   DEAD: number;
 }
 
+interface SendTelemetry {
+  enabled: boolean;
+  dryRun: boolean;
+  sentToday: number;
+  dailyCap: number;
+  capResetLabel: string | null;
+  lastRunAt: string | null;
+  lastRunResult: string | null;
+}
+
 const EMPTY_STATS: QueueStats = { QUEUED: 0, RUNNING: 0, DONE: 0, FAILED: 0, DEAD: 0 };
 
 type Slot = "google" | "facebook";
 
-const SLOT_META: Record<Slot, { title: string; hint: string }> = {
+const SLOT_META: Record<Slot, { bay: string; title: string; hint: string }> = {
   google: {
-    title: "Google Business Profile",
-    hint: "The listing with the name, rating and phone number.",
+    bay: "BAY-01",
+    title: "Google listing",
+    hint: "Name, rating, phone, website — the identity source.",
   },
   facebook: {
-    title: "Facebook — About section (optional)",
-    hint: "Skip it if the business has no Facebook page. This is where the email usually is.",
+    bay: "BAY-02",
+    title: "Facebook About",
+    hint: "Optional — the email address usually lives here.",
   },
 };
 
-const STATUS_STYLES: Record<JobRow["status"], { label: string; className: string }> = {
-  QUEUED: { label: "Queued", className: "bg-slate-100 text-slate-700" },
-  RUNNING: { label: "Working", className: "bg-blue-100 text-blue-700" },
-  DONE: { label: "Done", className: "bg-emerald-100 text-emerald-700" },
-  FAILED: { label: "Retrying", className: "bg-amber-100 text-amber-800" },
-  DEAD: { label: "Failed", className: "bg-red-100 text-red-700" },
+/** The machine, left to right. A stage lights up while a job is inside it. */
+const STAGES = [
+  "INTAKE",
+  "VISION READ",
+  "DEDUPE CHECK",
+  "CRAWL",
+  "AUDIT ENGINE",
+  "PROSPECT",
+  "AI REPORT",
+  "AUTO-SEND",
+] as const;
+
+const STATUS_TOKENS: Record<JobRow["status"], { token: string; className: string }> = {
+  QUEUED: { token: "WAIT", className: "text-[#8fa1b3]" },
+  RUNNING: { token: "RUN", className: "text-[#f5a524]" },
+  DONE: { token: "OK", className: "text-[#2fd583]" },
+  FAILED: { token: "RETRY", className: "text-[#f5a524]" },
+  DEAD: { token: "FAIL", className: "text-[#ff5f56]" },
 };
+
+const ENGINE_CELLS = [
+  { id: "nvidia", label: "NVIDIA NEMOTRON-VL", role: "vision read" },
+  { id: "grok", label: "GROK // XAI", role: "vision fallback · reserve" },
+  { id: "router", label: "ROUTER CHAIN", role: "reports · last resort" },
+];
+
+function timeAgo(iso: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86400)}d ago`;
+}
 
 /**
  * Shrinks a pasted screenshot before upload: max 1600px on the long edge,
@@ -112,6 +153,8 @@ export default function ScreenshotClient() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [stats, setStats] = useState<QueueStats>(EMPTY_STATS);
   const [queueError, setQueueError] = useState<string | null>(null);
+  const [send, setSend] = useState<SendTelemetry | null>(null);
+  const [clock, setClock] = useState("");
 
   const googleInputRef = useRef<HTMLInputElement>(null);
   const facebookInputRef = useRef<HTMLInputElement>(null);
@@ -122,7 +165,7 @@ export default function ScreenshotClient() {
     facebook: facebookInputRef,
   };
 
-  // --- queue polling -------------------------------------------------------
+  // --- telemetry polling ---------------------------------------------------
   const loadQueue = useCallback(async () => {
     try {
       const response = await fetch("/api/jobs", { cache: "no-store" });
@@ -136,15 +179,57 @@ export default function ScreenshotClient() {
     }
   }, []);
 
+  const loadSendState = useCallback(async () => {
+    try {
+      const response = await fetch("/api/automation/settings", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        settings?: { autoSendEnabled?: boolean; dryRun?: boolean };
+        usage?: {
+          sentToday?: number;
+          dailyCap?: number;
+          capResetLabel?: string;
+          lastRunAt?: string;
+          lastRunResult?: string;
+        };
+      };
+      setSend({
+        enabled: data.settings?.autoSendEnabled ?? false,
+        dryRun: data.settings?.dryRun ?? false,
+        sentToday: data.usage?.sentToday ?? 0,
+        dailyCap: data.usage?.dailyCap ?? 0,
+        capResetLabel: data.usage?.capResetLabel ?? null,
+        lastRunAt: data.usage?.lastRunAt ?? null,
+        lastRunResult: data.usage?.lastRunResult ?? null,
+      });
+    } catch {
+      // The console keeps its last known telemetry.
+    }
+  }, []);
+
   useEffect(() => {
     // Deferred by a tick so the first load is not a setState during render.
-    const initial = setTimeout(() => void loadQueue(), 0);
-    const timer = setInterval(() => void loadQueue(), 5000);
+    const initial = setTimeout(() => {
+      void loadQueue();
+      void loadSendState();
+    }, 0);
+    // The queue poll is the console's heartbeat; the settings read is slow and
+    // rarely changes, so it rides a longer interval to spare the free-tier DB.
+    const queueTimer = setInterval(() => void loadQueue(), 8_000);
+    const sendTimer = setInterval(() => void loadSendState(), 15_000);
     return () => {
       clearTimeout(initial);
-      clearInterval(timer);
+      clearInterval(queueTimer);
+      clearInterval(sendTimer);
     };
-  }, [loadQueue]);
+  }, [loadQueue, loadSendState]);
+
+  useEffect(() => {
+    const tick = () => setClock(new Date().toLocaleTimeString("en-GB", { hour12: false }));
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // --- file handling -------------------------------------------------------
   const setFile = (slot: Slot, file: File | null) => {
@@ -257,7 +342,7 @@ export default function ScreenshotClient() {
       setQueuedFlash(true);
       toast.success(
         "Added to the queue",
-        "Queueing is instant — the AI reads the screenshots and builds the audit in the background."
+        "Queueing is instant — the machine reads the screenshots and builds the audit in the background."
       );
       resetForm();
       void loadQueue();
@@ -299,45 +384,249 @@ export default function ScreenshotClient() {
     }
   };
 
+  // --- live pipeline derivation ---------------------------------------------
+  const activePhases = new Set(
+    jobs.filter((job) => job.status === "RUNNING").map((job) => job.phase ?? "")
+  );
+  const sendActive = send?.lastRunAt
+    ? Date.now() - new Date(send.lastRunAt).getTime() < 120_000
+    : false;
+  const reportWaiting = jobs.filter(
+    (job) => job.stage === "REPORT" && (job.status === "QUEUED" || job.status === "RUNNING")
+  ).length;
+  const capReached = Boolean(send && send.dailyCap > 0 && send.sentToday >= send.dailyCap);
+  const busy = stats.RUNNING > 0 || stats.QUEUED > 0;
+
+  const engineState = (id: string): { active: boolean; last: string | null } => {
+    const active = jobs.some((job) => {
+      if (job.status !== "RUNNING") return false;
+      // NVIDIA leads the vision chain, so a job mid-VISION-READ is served by
+      // it until a fallback stamp says otherwise (the engine field lands the
+      // moment the read returns).
+      const effective = job.engine ?? (job.phase === "VISION READ" ? "nvidia" : job.stage === "REPORT" ? "router" : null);
+      return effective === id;
+    });
+    const used = jobs.find(
+      (job) => (job.engine ?? (job.stage === "REPORT" && job.status === "DONE" ? "router" : null)) === id
+    );
+    return { active, last: used?.finishedAt ?? used?.createdAt ?? null };
+  };
+
+  const stageState = (stage: string): boolean => {
+    if (stage === "INTAKE") return stats.QUEUED > 0;
+    if (stage === "AI REPORT") return activePhases.has("AI REPORT") || reportWaiting > 0;
+    if (stage === "AUTO-SEND") return sendActive;
+    return activePhases.has(stage);
+  };
+
+  const sendLabel = !send
+    ? "LINKING"
+    : send.dryRun
+      ? "TEST MODE"
+      : capReached
+        ? "CAP REACHED"
+        : send.enabled
+          ? sendActive
+            ? "DISPATCHING"
+            : "ARMED"
+          : "STANDBY";
+
   // --- render --------------------------------------------------------------
   return (
-    <div className="flex flex-col gap-6">
-      <p className="text-sm text-muted-foreground">
-        Drop the Google listing screenshot — plus the Facebook About section when the business has
-        one — then press <span className="font-medium text-foreground">Add to queue</span>. Queueing
-        is instant and spends no AI; one AI worker reads the screenshots and finishes everything in
-        the background, and a send worker emails one audit every 2 minutes.
-      </p>
+    <div className="flex flex-col gap-4">
+      {/* TELEMETRY STRIP */}
+      <div className="flex flex-wrap items-stretch gap-px border border-[#1b2530] bg-[#0c1116]">
+        <McCell label="system" value="ONLINE" tone="green" led />
+        <McCell label="vision engine" value="NVIDIA NEMOTRON-VL" />
+        <McCell label="fallback chain" value="GROK ▸ ROUTER" />
+        <McCell
+          label="auto-send"
+          value={sendLabel}
+          tone={capReached ? "red" : send?.dryRun ? "amber" : send?.enabled ? "green" : "dim"}
+          led
+        />
+        <McCell label="dispatched today" value={String(send?.sentToday ?? 0)} />
+        <McCell label="queue" value={`${stats.QUEUED} ▸ ${stats.RUNNING} live ▸ ${stats.DONE} done`} />
+        <McCell label="clock" value={clock || "--:--:--"} tone="amber" />
+      </div>
 
-      {/* Add a business */}
-      <Card>
-        <CardContent className="p-6">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">Add a business</h2>
-            <span className="text-xs text-muted-foreground">
-              Paste with Ctrl+V or drag the images in
+      {/* AI ENGINE RACK — which brain is the machine using right now */}
+      <section className="mc-panel">
+        <div className="border-b border-[#1b2530] px-4 py-2.5">
+          <span className="mc-label">ai engines // live routing</span>
+        </div>
+        <div className="grid gap-px bg-[#1b2530] sm:grid-cols-3">
+          {ENGINE_CELLS.map((cell) => {
+            const state = engineState(cell.id);
+            const status = state.active
+              ? { text: "ACTIVE — SERVING NOW", cls: "text-[#f5a524]", led: "mc-led-amber" }
+              : state.last
+                ? { text: `last used ${timeAgo(state.last)}`, cls: "text-[#2fd583]", led: "mc-led-green" }
+                : { text: cell.id === "grok" ? "reserve · key not set" : "idle", cls: "text-[#64748b]", led: "mc-led-dim" };
+            return (
+              <div
+                key={cell.id}
+                className={`flex flex-col gap-1.5 px-4 py-3 ${state.active ? "bg-[#f5a524]/[0.06]" : "bg-[#0c1116]"}`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`mc-led ${status.led}`} />
+                  <span
+                    className={`text-[11px] font-semibold tracking-[0.1em] ${
+                      state.active ? "text-[#f5a524]" : "text-[#c8d3dd]"
+                    }`}
+                  >
+                    {cell.label}
+                  </span>
+                </div>
+                <span className={`text-[10px] uppercase tracking-[0.14em] ${status.cls}`}>
+                  {status.text}
+                </span>
+                <span className="text-[10px] text-[#4b5a68]">{cell.role}</span>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ENGINE BLOCK — the moving parts: fuel, load, pistons, gears */}
+      <section className="mc-panel">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1b2530] px-4 py-2.5">
+          <span className="mc-label">engine block // load &amp; motion</span>
+          <span className="flex items-center gap-2">
+            <Cog className={`h-3.5 w-3.5 ${busy ? "mc-gear text-[#f5a524]" : "text-[#3b4a59]"}`} />
+            <Cog className={`h-3 w-3 ${busy ? "mc-gear-rev text-[#8fa1b3]" : "text-[#3b4a59]"}`} />
+            <span className={`mc-label ${busy ? "text-[#f5a524]" : ""}`}>
+              {busy ? "engine running" : "engine idle"}
+            </span>
+          </span>
+        </div>
+        <div className="grid gap-px bg-[#1b2530] lg:grid-cols-4">
+          <Gauge
+            label="daily fuel"
+            value={send?.sentToday ?? 0}
+            max={send?.dailyCap || 300}
+            unit="sent"
+            tone={capReached ? "red" : "green"}
+            footer={
+              capReached
+                ? `empty · refills ${send?.capResetLabel ?? "06:00"} local (00:00 UTC) — audits keep running`
+                : `refills ${send?.capResetLabel ?? "06:00"} local (00:00 UTC)`
+            }
+          />
+          <Gauge
+            label="queue load"
+            value={stats.QUEUED}
+            max={Math.max(20, stats.QUEUED + stats.RUNNING)}
+            unit="waiting"
+            tone="amber"
+            footer={`${stats.DONE} completed · ${stats.DEAD} dead`}
+          />
+          <Gauge
+            label="live work"
+            value={stats.RUNNING}
+            max={4}
+            unit="jobs"
+            tone="amber"
+            footer={jobs.find((job) => job.status === "RUNNING")?.phase ?? "no job in flight"}
+          />
+
+          <div className="flex flex-col justify-center gap-3 bg-[#0c1116] px-4 py-3">
+            <span className="mc-label">cylinders</span>
+            <div className="flex items-end gap-1.5">
+              {Array.from({ length: 9 }).map((_, index) => (
+                <span
+                  key={index}
+                  className={`w-1.5 bg-[#f5a524] ${busy ? "mc-piston" : ""}`}
+                  style={{
+                    height: `${10 + (index % 4) * 7}px`,
+                    animationDelay: `${index * 0.08}s`,
+                    opacity: busy ? 1 : 0.22,
+                  }}
+                />
+              ))}
+            </div>
+            <span className="text-[10px] text-[#4b5a68]">
+              {busy
+                ? "intake feeding the line — audits continue even when sending pauses"
+                : "standing by — load screenshots into the bays"}
             </span>
           </div>
+        </div>
+      </section>
 
+      {/* PIPELINE SCHEMATIC */}
+      <section className="mc-panel">
+        <div className="flex items-center justify-between border-b border-[#1b2530] px-4 py-2.5">
+          <span className="mc-label">
+            pipeline <span className="mc-blink text-[#f5a524]">▮</span> live
+          </span>
+          <span className="mc-label">every stage below is real — fed by the workers</span>
+        </div>
+        <ol className="flex flex-wrap items-stretch gap-px bg-[#0c1116] p-3">
+          {STAGES.map((stage, index) => {
+            const active = stageState(stage);
+            const badge = stage === "INTAKE" ? stats.QUEUED : stage === "AI REPORT" ? reportWaiting : null;
+            return (
+              <li key={stage} className="flex items-center">
+                {index > 0 && (
+                  <span
+                    className={`mx-1 hidden h-px w-4 sm:block ${
+                      busy ? "mc-flow-line bg-[#1b2530]" : "bg-[#2b3948]"
+                    }`}
+                    aria-hidden
+                  />
+                )}
+                <div
+                  className={`flex items-center gap-2 border px-2.5 py-2 ${
+                    active
+                      ? "mc-run-stripes border-[#f5a524]/60 bg-[#f5a524]/[0.07]"
+                      : "border-[#1b2530] bg-[#10171e]"
+                  }`}
+                >
+                  <span className={`mc-led ${active ? "mc-led-amber" : "mc-led-dim"}`} />
+                  <span
+                    className={`text-[10px] uppercase tracking-[0.14em] ${
+                      active ? "text-[#f5a524]" : "text-[#64748b]"
+                    }`}
+                  >
+                    {stage}
+                  </span>
+                  {badge !== null && badge > 0 && (
+                    <span className="border border-[#2b3948] px-1 text-[10px] text-[#8fa1b3]">{badge}</span>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      </section>
+
+      {/* INTAKE CONSOLE */}
+      <section className="mc-panel">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1b2530] px-4 py-2.5">
+          <span className="mc-label">intake // load screenshots</span>
+          <span className="mc-label">paste with ctrl+v · both bays = auto-queue</span>
+        </div>
+
+        <div className="p-4">
           <div className="grid gap-4 sm:grid-cols-2">
             {(["google", "facebook"] as Slot[]).map((slot) => {
               const preview = previews[slot];
               const meta = SLOT_META[slot];
+              const loaded = Boolean(preview);
 
               return (
                 <div key={slot} className="flex flex-col gap-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-foreground">{meta.title}</span>
-                    {preview && (
-                      <button
-                        type="button"
-                        onClick={() => clearSlot(slot)}
-                        className="text-xs text-muted-foreground hover:text-foreground"
-                        aria-label={`Remove ${meta.title} screenshot`}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
+                    <span className="mc-label">
+                      {meta.bay} <span className="text-[#c8d3dd]">// {meta.title}</span>
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className={`mc-led ${loaded ? "mc-led-green" : "mc-led-dim"}`} />
+                      <span className={`text-[10px] uppercase tracking-[0.14em] ${loaded ? "text-[#2fd583]" : "text-[#64748b]"}`}>
+                        {loaded ? "locked" : "no media"}
+                      </span>
+                    </span>
                   </div>
 
                   <div
@@ -352,10 +641,10 @@ export default function ScreenshotClient() {
                       e.preventDefault();
                       setFile(slot, e.dataTransfer.files?.[0] ?? null);
                     }}
-                    className={`flex h-40 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-2 text-center transition-colors ${
+                    className={`mc-brackets flex h-40 cursor-pointer flex-col items-center justify-center gap-2 border border-dashed p-2 text-center transition-colors ${
                       preview
-                        ? "border-emerald-400 bg-emerald-50/40"
-                        : "border-border bg-muted/30 text-muted-foreground hover:border-primary/50 hover:bg-muted/50"
+                        ? "border-[#2fd583]/50 bg-[#2fd583]/[0.04]"
+                        : "border-[#2b3948] bg-[#10171e] hover:border-[#f5a524]/40 hover:bg-[#f5a524]/[0.03]"
                     }`}
                   >
                     {preview ? (
@@ -363,13 +652,15 @@ export default function ScreenshotClient() {
                       <img
                         src={preview}
                         alt={`${meta.title} preview`}
-                        className="h-full w-full rounded object-contain"
+                        className="h-full w-full object-contain"
                       />
                     ) : (
                       <>
-                        <ImageIcon className="h-5 w-5" />
-                        <span className="text-xs font-medium">Drop or click</span>
-                        <span className="text-[10px] text-muted-foreground/70">{meta.hint}</span>
+                        <ImageIcon className="h-5 w-5 text-[#64748b]" />
+                        <span className="text-[11px] uppercase tracking-[0.14em] text-[#8fa1b3]">
+                          drop or click
+                        </span>
+                        <span className="text-[10px] text-[#4b5a68]">{meta.hint}</span>
                       </>
                     )}
                   </div>
@@ -387,150 +678,250 @@ export default function ScreenshotClient() {
           </div>
 
           {error && (
-            <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-              {error}
+            <div className="mt-4 border border-[#ff5f56]/40 bg-[#ff5f56]/10 px-3 py-2 text-[11px] text-[#ff9a93]">
+              ! {error}
             </div>
           )}
 
           {queuedFlash && (
-            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-              <Check className="h-3.5 w-3.5" />
-              <span className="font-medium">Queued instantly — zero AI spent here.</span>
-              <span>
-                The worker reads the screenshots, checks duplicates and builds the audit in the
-                background.
-              </span>
+            <div className="mt-4 border border-[#2fd583]/40 bg-[#2fd583]/10 px-3 py-2 text-[11px] text-[#7be3b2]">
+              » queued — zero AI spent at intake. vision read starts in the background; watch the
+              pipeline above.
             </div>
           )}
 
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <Button onClick={handleQueue} disabled={submitting || !googleReady} className="gap-2">
+            <Button
+              onClick={handleQueue}
+              disabled={submitting || !googleReady}
+              className="gap-2 rounded-none border border-[#2b3948] bg-[#10171e] px-4 font-mono text-[11px] uppercase tracking-[0.16em] text-[#c8d3dd] hover:bg-[#1b2530] hover:text-[#f5a524]"
+            >
               {submitting ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Queueing...
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Committing...
                 </>
               ) : (
                 <>
-                  <Plus className="h-4 w-4" />
+                  <Plus className="h-3.5 w-3.5" />
                   Add to queue
                 </>
               )}
             </Button>
-            <span className="text-xs text-muted-foreground">
+            <span className="text-[10px] uppercase tracking-[0.14em] text-[#64748b]">
               {!googleReady
-                ? "The Google screenshot is required before queueing."
+                ? "bay-01 (google) must be loaded first"
                 : files.facebook
-                  ? "Both screenshots are ready."
-                  : "No Facebook screenshot — the audit will look for an email on the website instead."}
+                  ? "both bays locked — auto-queue armed"
+                  : "one bay loaded — manual queue only"}
             </span>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      {/* Queue */}
-      <Card>
-        <CardContent className="p-6">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold">Queue</h2>
-            <div className="flex flex-wrap items-center gap-2">
-              <StatChip label="Queued" value={stats.QUEUED} />
-              <StatChip label="Working" value={stats.RUNNING} tone="blue" />
-              <StatChip label="Done" value={stats.DONE} tone="emerald" />
-              <StatChip label="Failed" value={stats.DEAD} tone={stats.DEAD > 0 ? "red" : "slate"} />
-              <Button variant="ghost" size="sm" onClick={() => void loadQueue()} className="gap-1.5">
-                <RefreshCw className="h-3.5 w-3.5" />
-                Refresh
-              </Button>
-            </div>
+      {/* OPERATIONS LOG */}
+      <section className="mc-panel">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#1b2530] px-4 py-2.5">
+          <span className="mc-label">operations log // queue</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <McCell label="queued" value={String(stats.QUEUED)} />
+            <McCell label="running" value={String(stats.RUNNING)} tone="amber" led />
+            <McCell label="done" value={String(stats.DONE)} tone="green" led />
+            <McCell label="dead" value={String(stats.DEAD)} tone={stats.DEAD > 0 ? "red" : "dim"} led />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void loadQueue()}
+              className="gap-1.5 rounded-none font-mono text-[10px] uppercase tracking-[0.14em] text-[#64748b] hover:bg-[#10171e] hover:text-[#c8d3dd]"
+            >
+              <RefreshCw className="h-3 w-3" />
+              refresh
+            </Button>
           </div>
+        </div>
 
-          {queueError && (
-            <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              {queueError}
-            </p>
-          )}
+        {queueError && (
+          <p className="border-b border-[#f5a524]/30 bg-[#f5a524]/5 px-4 py-2 text-[11px] text-[#f5a524]">
+            ! {queueError}
+          </p>
+        )}
 
-          {jobs.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing in the queue yet. Add your first business above.
-            </p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {jobs.map((job) => {
-                const style = STATUS_STYLES[job.status] ?? STATUS_STYLES.QUEUED;
-                const canRetry = job.status === "DEAD" || job.status === "FAILED";
+        {jobs.length === 0 ? (
+          <p className="px-4 py-6 text-[11px] text-[#64748b]">
+            no operations yet. load the intake bays above — the machine takes it from there.
+          </p>
+        ) : (
+          <ul className="mc-terminal max-h-[460px] overflow-y-auto">
+            {jobs.map((job) => {
+              const token = STATUS_TOKENS[job.status] ?? STATUS_TOKENS.QUEUED;
+              const running = job.status === "RUNNING";
+              const canRetry = job.status === "DEAD" || job.status === "FAILED";
+              const time = new Date(job.createdAt).toLocaleTimeString("en-GB", { hour12: false });
 
-                return (
-                  <li key={job.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
-                    <div className="flex min-w-0 flex-col gap-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-medium text-foreground">{job.businessName}</span>
-                        {job.stage === "REPORT" && (
-                          <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-blue-700">
-                            report
-                          </span>
-                        )}
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${style.className}`}
-                        >
-                          {style.label}
-                        </span>
-                        {job.status === "QUEUED" && job.attempts > 0 && (
-                          <span className="text-[10px] text-muted-foreground">
-                            retry {job.attempts}/{job.maxAttempts}
-                          </span>
-                        )}
-                      </div>
-
-                      {job.note && (
-                        <p className="max-w-2xl text-xs text-emerald-700">{job.note}</p>
-                      )}
-
-                      {job.lastError && (
-                        <p className="max-w-2xl text-xs text-red-700">{job.lastError}</p>
-                      )}
-
-                      <span className="text-[10px] text-muted-foreground">
-                        {new Date(job.createdAt).toLocaleString()}
-                      </span>
-                    </div>
-
-                    {canRetry && (
-                      <Button size="sm" variant="outline" onClick={() => void handleRetry(job.id)}>
-                        Retry
-                      </Button>
+              return (
+                <li key={job.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-2.5 text-[11.5px]">
+                  <span className="w-[68px] shrink-0 text-[#4b5a68]">{time}</span>
+                  <span className={`w-[52px] shrink-0 font-semibold ${token.className}`}>
+                    [{token.token}]
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className={running ? "text-[#f5a524]" : "text-[#c8d3dd]"}>
+                      {job.businessName}
+                    </span>
+                    {job.stage === "REPORT" && (
+                      <span className="text-[#4b5a68]"> // AI REPORT</span>
                     )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+                    {job.engine && (
+                      <span className="border border-[#2b3948] px-1 text-[9px] uppercase tracking-[0.12em] text-[#8fa1b3]">
+                        {job.engine}
+                      </span>
+                    )}
+                    {job.status === "QUEUED" && job.attempts > 0 && (
+                      <span className="text-[#4b5a68]"> · retry {job.attempts}/{job.maxAttempts}</span>
+                    )}
+
+                    {running && job.phase && (
+                      <span className="ml-2 text-[#f5a524]">▸ {job.phase}</span>
+                    )}
+                    {job.note && <span className="block text-[#2fd583]">✓ {job.note}</span>}
+                    {job.lastError && (
+                      <span className="block text-[#ff9a93]">! {job.lastError}</span>
+                    )}
+                    {job.waitingUntil && (
+                      <span className="block text-[#4b5a68]">
+                        · next attempt {new Date(job.waitingUntil).toLocaleTimeString("en-GB", { hour12: false })}
+                      </span>
+                    )}
+                  </span>
+
+                  {canRetry && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void handleRetry(job.id)}
+                      className="h-6 rounded-none border-[#2b3948] bg-transparent px-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#8fa1b3] hover:bg-[#10171e] hover:text-[#f5a524]"
+                    >
+                      requeue
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
 
-function StatChip({
+/** A dial gauge — the machinery reads its own instruments. */
+function Gauge({
   label,
   value,
-  tone = "slate",
+  max,
+  unit,
+  tone = "amber",
+  footer,
 }: {
   label: string;
   value: number;
-  tone?: "slate" | "blue" | "emerald" | "red";
+  max: number;
+  unit: string;
+  tone?: "amber" | "green" | "red";
+  footer?: string;
 }) {
-  const tones: Record<string, string> = {
-    slate: "bg-slate-100 text-slate-700",
-    blue: "bg-blue-100 text-blue-700",
-    emerald: "bg-emerald-100 text-emerald-700",
-    red: "bg-red-100 text-red-700",
-  };
+  const ratio = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+  const stroke = tone === "green" ? "#2fd583" : tone === "red" ? "#ff5f56" : "#f5a524";
+  const needleAngle = -90 + ratio * 180;
+  const arcLength = 100.5; // π × 32, the length of the dial arc
 
   return (
-    <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${tones[tone]}`}>
-      {label} {value}
-    </span>
+    <div className="flex flex-col gap-1.5 bg-[#0c1116] px-4 py-3">
+      <span className="mc-label">{label}</span>
+      <div className="flex items-center gap-3">
+        <svg
+          viewBox="0 0 88 56"
+          className="h-14 w-[88px]"
+          role="img"
+          aria-label={`${label}: ${value} of ${max}`}
+        >
+          <path d="M 12 48 A 32 32 0 0 1 76 48" fill="none" stroke="#1b2530" strokeWidth="6" />
+          <path
+            d="M 12 48 A 32 32 0 0 1 76 48"
+            fill="none"
+            stroke={stroke}
+            strokeWidth="6"
+            className="mc-gauge-arc"
+            strokeDasharray={`${(ratio * arcLength).toFixed(1)} 200`}
+          />
+          {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+            const angle = ((-90 + tick * 180) * Math.PI) / 180;
+            return (
+              <line
+                key={tick}
+                x1={44 + Math.sin(angle) * 26}
+                y1={48 - Math.cos(angle) * 26}
+                x2={44 + Math.sin(angle) * 22}
+                y2={48 - Math.cos(angle) * 22}
+                stroke="#3b4a59"
+                strokeWidth="1"
+              />
+            );
+          })}
+          <line
+            x1="44"
+            y1="48"
+            x2="44"
+            y2="22"
+            stroke="#c8d3dd"
+            strokeWidth="1.5"
+            transform={`rotate(${needleAngle} 44 48)`}
+          />
+          <circle cx="44" cy="48" r="2.5" fill="#c8d3dd" />
+        </svg>
+        <div className="flex flex-col">
+          <span className="text-[15px] leading-none" style={{ color: stroke }}>
+            {value}
+          </span>
+          <span className="text-[10px] uppercase tracking-[0.14em] text-[#4b5a68]">
+            / {max} {unit}
+          </span>
+        </div>
+      </div>
+      {footer && <span className="text-[10px] text-[#4b5a68]">{footer}</span>}
+    </div>
+  );
+}
+
+function McCell({
+  label,
+  value,
+  tone = "dim",
+  led = false,
+}: {
+  label: string;
+  value: string;
+  tone?: "dim" | "green" | "amber" | "red";
+  led?: boolean;
+}) {
+  const toneClass =
+    tone === "green"
+      ? "text-[#2fd583]"
+      : tone === "amber"
+        ? "text-[#f5a524]"
+        : tone === "red"
+          ? "text-[#ff5f56]"
+          : "text-[#c8d3dd]";
+  const ledClass =
+    tone === "green" ? "mc-led-green" : tone === "amber" ? "mc-led-amber" : tone === "red" ? "mc-led-red" : "mc-led-dim";
+
+  return (
+    <div className="flex min-w-[130px] flex-1 items-center gap-2 px-3 py-2">
+      {led && <span className={`mc-led ${ledClass}`} />}
+      <div className="flex min-w-0 flex-col">
+        <span className="mc-label">{label}</span>
+        <span className={`truncate text-[11.5px] ${toneClass}`}>{value}</span>
+      </div>
+    </div>
   );
 }

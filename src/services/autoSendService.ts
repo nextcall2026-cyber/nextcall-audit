@@ -10,7 +10,8 @@ import {
   automationSettingsService,
   currentHourInTimezone,
   isWithinBusinessHours,
-  startOfDayIso,
+  nextUtcResetLabel,
+  startOfUtcDayIso,
 } from "@/services/automationSettingsService";
 import { logger } from "@/lib/logger";
 
@@ -104,17 +105,19 @@ class AutoSendService {
     }
 
     const sentToday = await outreachPersistenceService.countSentSince(
-      startOfDayIso(settings.timezone)
+      startOfUtcDayIso()
     );
     let remaining = Math.max(0, settings.dailyCap - sentToday);
 
     if (remaining === 0) {
+      // The cap pauses SENDING only — audits and reports keep being built, so
+      // tomorrow's window opens with a full queue ready to go out.
       return {
         ran: true,
         dryRun: settings.dryRun,
         candidates: 0,
         sent: 0,
-        skipped: `daily cap of ${settings.dailyCap} reached`,
+        skipped: `daily cap of ${settings.dailyCap} reached — sending resumes at ${nextUtcResetLabel(settings.timezone)} local (00:00 UTC); audits keep running`,
       };
     }
 
@@ -134,10 +137,14 @@ class AutoSendService {
     let aiFailure: string | null = null;
     let aiFailures = 0;
     let passBudgetReached = false;
+    let capReached = false;
     let reportsGenerated = 0;
 
     for (const prospect of candidates) {
-      if (remaining <= 0) break;
+      if (remaining <= 0) {
+        capReached = true;
+        break;
+      }
 
       if (sent >= maxSends) {
         passBudgetReached = true;
@@ -255,9 +262,11 @@ class AutoSendService {
       dryRun: settings.dryRun,
       candidates: candidates.length,
       sent,
-      skipped: passBudgetReached
-        ? `${maxSends} per pass — ${Math.max(0, candidates.length - sent)} still queued for the next pass`
-        : "",
+      skipped: capReached
+        ? `daily cap of ${settings.dailyCap} reached — sending resumes at ${nextUtcResetLabel(settings.timezone)} local (00:00 UTC); audits keep running`
+        : passBudgetReached
+          ? `${maxSends} per pass — ${Math.max(0, candidates.length - sent)} still queued for the next pass`
+          : "",
     };
   }
 }

@@ -107,6 +107,8 @@ async function runPass(workerId: string): Promise<PassSummary> {
       // AI report and finish. Text-only, so it always fits the window.
       if (job.stage === "REPORT") {
         await awaitWarm();
+        await jobQueueService.setPhase(job.id, "AI REPORT");
+        await jobQueueService.setEngine(job.id, "router");
         const { generated } = await auditPipelineService.runReportStage(job.businessId);
         await jobQueueService.complete(job.id);
         done += 1;
@@ -121,6 +123,7 @@ async function runPass(workerId: string): Promise<PassSummary> {
       // Screenshot-stage job: read the stored uploads with AI, create the
       // business, then run the pipeline on it. Returns null for a duplicate
       // (the job is completed with a note instead).
+      await jobQueueService.setPhase(job.id, "VISION READ");
       const businessId = await ensureBusinessFromScreenshots(job, awaitWarm);
 
       if (!businessId) {
@@ -133,7 +136,10 @@ async function runPass(workerId: string): Promise<PassSummary> {
         continue;
       }
 
-      const result = await auditPipelineService.run(businessId);
+      await jobQueueService.setPhase(job.id, "PIPELINE");
+      const result = await auditPipelineService.run(businessId, (phase) => {
+        void jobQueueService.setPhase(job.id, phase).catch(() => undefined);
+      });
       await jobQueueService.complete(job.id);
       done += 1;
       results.push({
@@ -297,19 +303,17 @@ async function ensureBusinessFromScreenshots(
     kind: ScreenshotKind,
     upload: ScreenshotUpload,
     timeoutMs: number
-  ): Promise<{ fields: ExtractedScreenshotFields | null; error: unknown }> => {
+  ): Promise<{ fields: ExtractedScreenshotFields | null; engine: string | null; error: unknown }> => {
     await awaitWarm();
     try {
-      return {
-        fields: await extractFromScreenshot(
-          kind,
-          { bytes: Buffer.from(upload.dataBase64, "base64"), mimeType: upload.mimeType },
-          { timeoutMs }
-        ),
-        error: null,
-      };
+      const read = await extractFromScreenshot(
+        kind,
+        { bytes: Buffer.from(upload.dataBase64, "base64"), mimeType: upload.mimeType },
+        { timeoutMs }
+      );
+      return { fields: read.fields, engine: read.engine, error: null };
     } catch (error) {
-      return { fields: null, error };
+      return { fields: null, engine: null, error };
     }
   };
 
@@ -330,6 +334,9 @@ async function ensureBusinessFromScreenshots(
     throw error ?? new Error("The Google screenshot read failed without an error.");
   }
   const googleFields: ExtractedScreenshotFields = googleRead.fields;
+  if (googleRead.engine) {
+    await jobQueueService.setEngine(job.id, googleRead.engine);
+  }
 
   // Facebook is best-effort: no page (or an unreadable one) still leaves a
   // runnable audit — the website crawl gets a chance at the email instead.
@@ -350,6 +357,7 @@ async function ensureBusinessFromScreenshots(
   }
 
   const { business, duplicateOf } = await saveBusinessFromScreenshots(googleFields, facebookFields);
+  await jobQueueService.setPhase(job.id, "DEDUPE CHECK");
 
   // Delete the uploads before the pipeline: the reads are done, and this
   // keeps a failed pipeline retry from re-reading (and re-paying for) them.

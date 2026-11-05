@@ -139,7 +139,7 @@ async function readOnce(
   bytes: Buffer,
   mimeType: string,
   timeoutMs: number
-): Promise<ExtractedScreenshotFields | null> {
+): Promise<{ fields: ExtractedScreenshotFields; engine: string; model: string } | null> {
   const label = kind === "google" ? "Google Business Profile" : "Facebook About";
 
   const llm = await readWithVisionChain({
@@ -155,7 +155,7 @@ async function readOnce(
 
   try {
     const result = ExtractedSchema.safeParse(JSON.parse(stripFences(llm.text)));
-    if (result.success) return result.data;
+    if (result.success) return { fields: result.data, engine: llm.provider, model: llm.model };
     logger.warn(`[ScreenshotExtractor] ${label}: reply did not match the schema.`);
   } catch {
     logger.warn(`[ScreenshotExtractor] ${label}: unreadable JSON.`);
@@ -167,7 +167,7 @@ export async function extractFromScreenshot(
   kind: ScreenshotKind,
   source: ScreenshotSource,
   options: { timeoutMs?: number } = {}
-): Promise<ExtractedScreenshotFields> {
+): Promise<{ fields: ExtractedScreenshotFields; engine: string; model: string }> {
   const { bytes, mimeType } = await toImage(source);
   const label = kind === "google" ? "Google Business Profile" : "Facebook About";
   const budget = options.timeoutMs ?? 30_000;
@@ -178,8 +178,8 @@ export async function extractFromScreenshot(
   for (let attempt = 0; ; attempt++) {
     const remaining = Math.max(5_000, deadline - Date.now());
     try {
-      const fields = await readOnce(kind, bytes, mimeType, remaining);
-      if (fields) return fields;
+      const read = await readOnce(kind, bytes, mimeType, remaining);
+      if (read) return read;
 
       // The model answered but the reply was unusable — retrying the same
       // image on the same chain rarely changes that, and the caller treats

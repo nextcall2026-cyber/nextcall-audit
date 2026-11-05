@@ -238,6 +238,38 @@ export function currentHourInTimezone(timeZone: string): number {
   }
 }
 
+/**
+ * The email providers reset their daily allowance at 00:00 UTC — the cap and
+ * the usage meter must share that boundary, not the operator's local midnight
+ * (which would hand out a fresh allowance six hours before the provider does).
+ */
+export function startOfUtcDayIso(): string {
+  return `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+}
+
+/** ISO timestamp of the next provider reset (00:00 UTC). */
+export function nextUtcResetIso(): string {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0)
+  ).toISOString();
+}
+
+/** The next reset as the operator's wall clock, e.g. "06:00". */
+export function nextUtcResetLabel(timeZone: string): string {
+  const next = new Date(nextUtcResetIso());
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(next);
+  } catch {
+    return `${next.toISOString().slice(11, 16)} UTC`;
+  }
+}
+
 /** ISO timestamp for 00:00 today in the given timezone. */
 export function startOfDayIso(timeZone: string): string {
   const now = new Date();

@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConsoleHeader } from "@/components/console/ConsoleUI";
 import { env } from "@/lib/env";
 import { CheckCircle2, XCircle, Info, Shield, Mail, Brain, Search, Gauge } from "lucide-react";
 import AutoSendSettingsCard from "@/components/notifications/AutoSendSettingsCard";
@@ -52,10 +53,11 @@ export default async function SettingsPage() {
 
     return (
         <div className="flex flex-col gap-6">
-            <div>
-                <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
-                <p className="text-sm text-muted-foreground mt-1">View application configuration and service status.</p>
-            </div>
+            <ConsoleHeader
+                eyebrow="NextCall outreach machine // configuration"
+                title="SETTINGS"
+                meta="Service status, send capacity and the automation rules that drive the machine."
+            />
 
             {/* Outreach automation lives here rather than under Notifications:
                 it is a sending rule, not an alert. */}

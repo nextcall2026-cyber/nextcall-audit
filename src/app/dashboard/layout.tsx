@@ -57,9 +57,9 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
 
     return (
         <nav className="flex flex-col gap-4 p-4">
-            <Link href="/dashboard" className="mb-4 flex items-center gap-2 text-lg font-semibold tracking-tight text-foreground">
-                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground text-xs font-bold">NC</span>
-                NextCall Prospector
+            <Link href="/dashboard" className="mb-4 flex items-center gap-2 text-sm font-semibold tracking-[0.14em] text-foreground">
+                <span className="flex h-7 w-7 items-center justify-center rounded-none border border-[#2b3948] bg-[#10171e] text-[10px] font-bold tracking-widest text-[#f5a524]">NC</span>
+                NEXTCALL // CONSOLE
             </Link>
             <div className="flex flex-col gap-0.5">
                 {navItems.map((item) => {
@@ -110,7 +110,7 @@ export default function DashboardLayout({
     return (
         <ToastProvider>
         <AutomationHeartbeat />
-        <div className="flex min-h-screen w-full flex-col bg-muted/40">
+        <div className="flex min-h-screen w-full flex-col mc-scope">
             {/* Desktop sidebar (sm and up) — collapsible */}
             {!isSidebarCollapsed && (
                 <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-col border-r bg-sidebar sm:flex">

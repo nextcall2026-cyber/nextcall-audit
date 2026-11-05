@@ -492,6 +492,10 @@ export interface AuditJob {
   lastErrorCode: string | null;
   /** Non-error outcome note (e.g. "Duplicate — already in the app"). */
   note?: string | null;
+  /** Live progress marker for the operator console (set while RUNNING). */
+  phase?: string | null;
+  /** Which AI engine served this job (nvidia / grok / router). */
+  engine?: string | null;
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;

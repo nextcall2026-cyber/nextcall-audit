@@ -1,9 +1,14 @@
 import PipelineClient from "@/components/pipeline/PipelineClient";
+import { ConsoleHeader } from "@/components/console/ConsoleUI";
 
 export default function PipelinePage() {
     return (
-        <div className="flex flex-1 flex-col gap-4 p-4 sm:px-6 sm:py-6">
-            <h1 className="text-lg font-semibold">Sales Pipeline</h1>
+        <div className="flex flex-1 flex-col gap-4">
+            <ConsoleHeader
+                eyebrow="NextCall outreach machine // pipeline"
+                title="SALES PIPELINE"
+                meta="Every audited business lands here, scored and ready to contact."
+            />
             <PipelineClient />
         </div>
     );

@@ -1,16 +1,15 @@
 import NotificationsClient from "@/components/notifications/NotificationsClient";
 import NotificationSettingsCard from "@/components/notifications/NotificationSettingsCard";
+import { ConsoleHeader } from "@/components/console/ConsoleUI";
 
 export default function NotificationsPage() {
     return (
-        <div className="flex flex-col gap-6">
-            <div className="flex flex-col gap-1">
-                <h1 className="text-lg font-semibold">Notifications</h1>
-                <p className="text-sm text-muted-foreground">
-                    Everything that happened while you were away — new prospects, audits, emails sent,
-                    opens, replies and problems worth knowing about.
-                </p>
-            </div>
+        <div className="flex flex-col gap-5">
+            <ConsoleHeader
+                eyebrow="NextCall outreach machine // event feed"
+                title="NOTIFICATIONS"
+                meta="New prospects, audits, emails sent, opens, replies and problems — the machine's own event log."
+            />
 
             <NotificationsClient />
 

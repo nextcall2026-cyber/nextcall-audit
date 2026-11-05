@@ -66,7 +66,10 @@ class AuditPipelineService {
     );
   }
 
-  async run(businessId: string): Promise<AuditPipelineResult> {
+  async run(
+    businessId: string,
+    onPhase?: (phase: string) => void
+  ): Promise<AuditPipelineResult> {
     const business = await persistenceService.getBusinessById(businessId);
     if (!business) {
       throw new AuditPipelineError(
@@ -80,6 +83,7 @@ class AuditPipelineService {
     //
     //    Checkpoint: a fresh crawl (last 24h) is reused instead of re-fetched,
     //    so a retry resumes here instead of paying the whole crawl again.
+    onPhase?.("CRAWL");
     let enrichedBusiness: Business;
     let crawledFresh = false;
     try {
@@ -118,6 +122,7 @@ class AuditPipelineService {
     // 3. Deterministic audit — no network, no AI, so it cannot fail silently.
     //    Checkpoint: when the crawl was reused (the inputs cannot have
     //    changed) and a recent audit exists, reuse it instead of recalculating.
+    onPhase?.("AUDIT ENGINE");
     let auditResult: AuditResult | null = null;
     let auditRecord: StoredAudit | null = null;
 
@@ -162,6 +167,7 @@ class AuditPipelineService {
     const needsReport = !auditRecord.aiReport;
 
     // 5. Pipeline
+    onPhase?.("PROSPECT");
     await priorityService.recalculatePriorityForBusiness(businessId);
 
     const contactEmail = pickBestEmailForBusiness(enrichedBusiness);

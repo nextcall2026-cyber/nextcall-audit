@@ -143,6 +143,42 @@ class JobQueueService {
     }
   }
 
+  /**
+   * Live progress marker for the operator console: what the machine is doing
+   * with this job right now (VISION READ, DEDUPE CHECK, CRAWL, ...). Only
+   * stamps RUNNING jobs and doubles as a lease heartbeat.
+   */
+  async setPhase(jobId: string, phase: string): Promise<void> {
+    try {
+      const collection = await getAuditJobsCollection();
+      await collection.updateOne(
+        { id: jobId, status: "RUNNING" },
+        {
+          $set: {
+            phase,
+            lockedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        }
+      );
+    } catch (error) {
+      logger.warn(`[JobQueue] Phase update failed for ${jobId}: ${getErrorMessage(error)}`);
+    }
+  }
+
+  /** Which AI engine served this job — lights up the console's engine rack. */
+  async setEngine(jobId: string, engine: string): Promise<void> {
+    try {
+      const collection = await getAuditJobsCollection();
+      await collection.updateOne(
+        { id: jobId, status: "RUNNING" },
+        { $set: { engine } }
+      );
+    } catch (error) {
+      logger.warn(`[JobQueue] Engine update failed for ${jobId}: ${getErrorMessage(error)}`);
+    }
+  }
+
   async complete(jobId: string, note?: string): Promise<void> {
     try {
       const collection = await getAuditJobsCollection();

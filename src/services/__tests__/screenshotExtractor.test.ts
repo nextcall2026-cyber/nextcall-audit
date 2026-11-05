@@ -39,7 +39,8 @@ describe("extractFromScreenshot", () => {
 
     const result = await extractFromScreenshot("google", screenshot(), { timeoutMs: 5_000 });
 
-    expect(result.name).toBe("Acme");
+    expect(result.fields.name).toBe("Acme");
+    expect(result.engine).toBe("nvidia");
     expect(mocks.readWithVisionChain).toHaveBeenCalledTimes(1);
     const call = mocks.readWithVisionChain.mock.calls[0][0];
     expect(call.imageBase64).toBeTruthy();
@@ -57,7 +58,7 @@ describe("extractFromScreenshot", () => {
       { timeoutMs: 5_000 }
     );
 
-    expect(result.email).toBe("hi@acme.com");
+    expect(result.fields.email).toBe("hi@acme.com");
     const call = mocks.readWithVisionChain.mock.calls[0][0];
     expect(call.mimeType).toBe("image/jpeg");
   });
@@ -70,7 +71,7 @@ describe("extractFromScreenshot", () => {
     });
 
     const result = await extractFromScreenshot("google", screenshot(), { timeoutMs: 5_000 });
-    expect(result.name).toBe("Fenced Co");
+    expect(result.fields.name).toBe("Fenced Co");
   });
 
   it("waits out a rate limit and retries the same chain", async () => {
@@ -84,7 +85,7 @@ describe("extractFromScreenshot", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const result = await pending;
 
-    expect(result.name).toBe("Acme");
+    expect(result.fields.name).toBe("Acme");
     expect(mocks.readWithVisionChain).toHaveBeenCalledTimes(2);
   });
 
