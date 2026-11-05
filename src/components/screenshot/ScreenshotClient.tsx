@@ -115,6 +115,8 @@ export default function ScreenshotClient() {
 
   const googleInputRef = useRef<HTMLInputElement>(null);
   const facebookInputRef = useRef<HTMLInputElement>(null);
+  /** Re-armed whenever a screenshot is added/changed; spent by the auto-queue. */
+  const autoQueuedRef = useRef(false);
   const inputRefs: Record<Slot, React.RefObject<HTMLInputElement | null>> = {
     google: googleInputRef,
     facebook: facebookInputRef,
@@ -163,6 +165,7 @@ export default function ScreenshotClient() {
 
     setError(null);
     setQueuedFlash(false);
+    autoQueuedRef.current = false;
 
     setFiles((prev) => ({ ...prev, [slot]: file }));
     setPreviews((prev) => {
@@ -182,6 +185,7 @@ export default function ScreenshotClient() {
   const resetForm = () => {
     (["google", "facebook"] as Slot[]).forEach(clearSlot);
     setError(null);
+    autoQueuedRef.current = false;
   };
 
   // Ctrl+V anywhere: fills the first empty box (Google first).
@@ -266,6 +270,19 @@ export default function ScreenshotClient() {
       setSubmitting(false);
     }
   };
+
+  // Both boxes filled → queue automatically, no button press. One screenshot
+  // only → the operator presses "Add to queue" themselves (their explicit
+  // choice). The ref spends the auto-submit once per pair; adding or changing
+  // a screenshot re-arms it, so a failed attempt never loops on its own.
+  useEffect(() => {
+    if (!(files.google && files.facebook) || submitting || autoQueuedRef.current) return;
+    autoQueuedRef.current = true;
+    void handleQueue();
+    // handleQueue closes over this exact render's files — excluding it from
+    // the deps is what prevents a double submit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files.google, files.facebook, submitting]);
 
   const handleRetry = async (jobId: string) => {
     try {
