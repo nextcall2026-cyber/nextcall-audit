@@ -143,7 +143,7 @@ class JobQueueService {
     }
   }
 
-  async complete(jobId: string): Promise<void> {
+  async complete(jobId: string, note?: string): Promise<void> {
     try {
       const collection = await getAuditJobsCollection();
       const now = new Date().toISOString();
@@ -156,12 +156,13 @@ class JobQueueService {
             workerId: null,
             lastError: null,
             lastErrorCode: null,
+            note: note ?? null,
             updatedAt: now,
             finishedAt: now,
           },
         }
       );
-      logger.info(`[JobQueue] Job ${jobId} finished.`);
+      logger.info(`[JobQueue] Job ${jobId} finished.${note ? ` (${note})` : ""}`);
     } catch (error) {
       logger.error(`[JobQueue] Complete failed for ${jobId}:`, getErrorMessage(error));
     }

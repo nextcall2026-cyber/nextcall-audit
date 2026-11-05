@@ -30,6 +30,8 @@ interface JobRow {
   attempts: number;
   maxAttempts: number;
   lastError: string | null;
+  /** Non-error outcome note, e.g. "Duplicate — already in the app". */
+  note?: string | null;
   createdAt: string;
   finishedAt: string | null;
   waitingUntil: string | null;
@@ -463,6 +465,10 @@ export default function ScreenshotClient() {
                           </span>
                         )}
                       </div>
+
+                      {job.note && (
+                        <p className="max-w-2xl text-xs text-emerald-700">{job.note}</p>
+                      )}
 
                       {job.lastError && (
                         <p className="max-w-2xl text-xs text-red-700">{job.lastError}</p>

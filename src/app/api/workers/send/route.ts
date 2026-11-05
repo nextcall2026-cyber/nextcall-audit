@@ -29,6 +29,14 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 async function runSendPass(): Promise<AutoSendReport> {
+  // Minimum gap between send passes: the audit worker chains this pass every
+  // minute, and an external send cron may fire too — never send twice within
+  // one minute. Skipped silently (no run-log stamp), so the gap stays honest.
+  const state = await automationRunLogService.getState();
+  if (state.lastRunAt && Date.now() - new Date(state.lastRunAt).getTime() < 60_000) {
+    return { ran: false, dryRun: false, candidates: 0, sent: 0, skipped: "ran less than a minute ago" };
+  }
+
   const report = await autoSendService.runPass();
 
   await automationRunLogService.markRun(

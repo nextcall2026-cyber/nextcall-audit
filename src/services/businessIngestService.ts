@@ -37,22 +37,49 @@ function normalizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-/**
- * A single cheap key so the duplicate check is one lookup instead of a full
- * collection scan: the website domain when there is one, otherwise the
- * squashed business name. A duplicate that slips past this (same business,
- * different domain) is still caught later by the one-business-one-email guard
- * at send time.
- */
-export function dedupeKeyFor(name: string, website: string | null): string {
-  const domain = website ? domainOf(website) : null;
-  return domain ? `d:${domain}` : `n:${normalizeName(name)}`;
+/** Normalises a phone number into a stable identity fragment. */
+function phoneKey(phone: string | null | undefined): string | null {
+  const digits = (phone ?? "").replace(/\D/g, "");
+  if (digits.length < 10) return null;
+  return `p:${digits.slice(-10)}`;
 }
 
-export async function findExistingBusiness(dedupeKey: string): Promise<Business | null> {
+/**
+ * All the keys this business could be recognised by later.
+ *
+ * The duplicate check matches ANY of them ($in) — so a second upload of the
+ * same business is caught even when the vision read differs between the two
+ * screenshots (one read finds the website, the other doesn't, the phone is
+ * printed on both, the name carries a different suffix…).
+ */
+export function dedupeKeysFor(
+  name: string,
+  website: string | null,
+  phone?: string | null
+): string[] {
+  const keys = new Set<string>();
+  const domain = website ? domainOf(website) : null;
+  if (domain) keys.add(`d:${domain}`);
+  const phoneFragment = phoneKey(phone);
+  if (phoneFragment) keys.add(phoneFragment);
+  if (name?.trim()) keys.add(`n:${normalizeName(name)}`);
+  return [...keys];
+}
+
+/** The single key stored on the business document (most specific first). */
+export function dedupeKeyFor(
+  name: string,
+  website: string | null,
+  phone?: string | null
+): string {
+  const keys = dedupeKeysFor(name, website, phone);
+  return keys[0] ?? `n:${normalizeName(name)}`;
+}
+
+export async function findExistingBusiness(dedupeKeys: string[]): Promise<Business | null> {
   try {
     const collection = await getBusinessesCollection();
-    const doc = await collection.findOne({ dedupeKey });
+    const doc = await collection.findOne({ dedupeKey: { $in: dedupeKeys } });
     return (doc as unknown as Business) ?? null;
   } catch (error) {
     // Fail open: a lookup problem must not block work from proceeding.
@@ -103,8 +130,8 @@ export async function saveBusinessFromScreenshots(
   const rating = google?.rating ?? facebook?.rating ?? null;
   const reviewCount = google?.reviewCount ?? facebook?.reviewCount ?? null;
 
-  const dedupeKey = dedupeKeyFor(name, website);
-  const existing = await findExistingBusiness(dedupeKey);
+  const dedupeKey = dedupeKeyFor(name, website, phone);
+  const existing = await findExistingBusiness(dedupeKeysFor(name, website, phone));
 
   if (existing) {
     return { business: existing, duplicateOf: existing };

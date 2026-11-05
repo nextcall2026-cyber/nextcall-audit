@@ -226,6 +226,20 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       logger.error("[Worker /audit] Background pass crashed:", getErrorMessage(error));
     }
+
+    // The audit cron is the heartbeat the send worker rides on: one ping per
+    // minute, so auto-send keeps moving even without its own scheduler. The
+    // send pass enforces its own 60s minimum gap, so an external send cron
+    // can never double-send with this ping.
+    try {
+      const sendUrl = `${new URL(request.url).origin}/api/workers/send`;
+      void fetch(sendUrl, {
+        method: "POST",
+        headers: { "x-cron-secret": process.env.CRON_SECRET ?? "" },
+      }).catch(() => undefined);
+    } catch {
+      // Never let the send ping break the audit pass.
+    }
   });
 
   return NextResponse.json({ accepted: true, worker: workerId }, { status: 202 });
@@ -353,7 +367,7 @@ async function ensureBusinessFromScreenshots(
       businessId: duplicateOf.id,
       dedupeKey: `screenshot-duplicate:${duplicateOf.id}`,
     });
-    await jobQueueService.complete(job.id);
+    await jobQueueService.complete(job.id, "Duplicate — already in the app, nothing queued");
     return null;
   }
 

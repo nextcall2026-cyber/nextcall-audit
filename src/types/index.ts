@@ -490,6 +490,8 @@ export interface AuditJob {
   /** Plain-English reason the last attempt failed — shown in the UI. */
   lastError: string | null;
   lastErrorCode: string | null;
+  /** Non-error outcome note (e.g. "Duplicate — already in the app"). */
+  note?: string | null;
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;
