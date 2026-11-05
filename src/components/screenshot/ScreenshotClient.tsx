@@ -58,6 +58,22 @@ interface SendTelemetry {
   lastRunResult: string | null;
 }
 
+/** Real pixel/file facts about a bay's screenshot, printed under the image. */
+interface BayMedia {
+  name: string;
+  bytes: number;
+  width: number;
+  height: number;
+}
+
+/** The ticket the console prints after the queue accepts a set of bays. */
+interface QueuedReceipt {
+  jobId: string;
+  hasFacebook: boolean;
+  at: string;
+  media: string[];
+}
+
 const EMPTY_STATS: QueueStats = { QUEUED: 0, RUNNING: 0, DONE: 0, FAILED: 0, DEAD: 0 };
 
 type Slot = "google" | "facebook";
@@ -148,7 +164,8 @@ export default function ScreenshotClient() {
   const [previews, setPreviews] = useState<Record<Slot, string | null>>({ google: null, facebook: null });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [queuedFlash, setQueuedFlash] = useState(false);
+  const [media, setMedia] = useState<Record<Slot, BayMedia | null>>({ google: null, facebook: null });
+  const [receipt, setReceipt] = useState<QueuedReceipt | null>(null);
 
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [stats, setStats] = useState<QueueStats>(EMPTY_STATS);
@@ -249,10 +266,31 @@ export default function ScreenshotClient() {
     }
 
     setError(null);
-    setQueuedFlash(false);
+    setReceipt(null);
     autoQueuedRef.current = false;
 
     setFiles((prev) => ({ ...prev, [slot]: file }));
+
+    // Probe the real pixel size, so the bay can print a genuine readout under
+    // the image instead of just showing a picture.
+    const probeUrl = URL.createObjectURL(file);
+    const probe = new Image();
+    const record = (width: number, height: number) => {
+      setMedia((prev) => ({
+        ...prev,
+        [slot]: {
+          name: file.name || "pasted screenshot",
+          bytes: file.size,
+          width,
+          height,
+        },
+      }));
+      URL.revokeObjectURL(probeUrl);
+    };
+    probe.onload = () => record(probe.naturalWidth, probe.naturalHeight);
+    probe.onerror = () => record(0, 0);
+    probe.src = probeUrl;
+
     setPreviews((prev) => {
       if (prev[slot]) URL.revokeObjectURL(prev[slot]!);
       return { ...prev, [slot]: URL.createObjectURL(file) };
@@ -261,6 +299,7 @@ export default function ScreenshotClient() {
 
   const clearSlot = (slot: Slot) => {
     setFiles((prev) => ({ ...prev, [slot]: null }));
+    setMedia((prev) => ({ ...prev, [slot]: null }));
     setPreviews((prev) => {
       if (prev[slot]) URL.revokeObjectURL(prev[slot]!);
       return { ...prev, [slot]: null };
@@ -339,7 +378,19 @@ export default function ScreenshotClient() {
         return;
       }
 
-      setQueuedFlash(true);
+      setReceipt({
+        jobId: typeof data.jobId === "string" ? data.jobId : "unknown",
+        hasFacebook: Boolean(data.hasFacebook),
+        at: new Date().toLocaleTimeString("en-GB", { hour12: false }),
+        media: [
+          files.google
+            ? `${files.google.name || "google listing"} · ${(files.google.size / 1024).toFixed(0)} KB`
+            : null,
+          files.facebook
+            ? `${files.facebook.name || "facebook about"} · ${(files.facebook.size / 1024).toFixed(0)} KB`
+            : null,
+        ].filter((line): line is string => line !== null),
+      });
       toast.success(
         "Added to the queue",
         "Queueing is instant — the machine reads the screenshots and builds the audit in the background."
@@ -570,29 +621,35 @@ export default function ScreenshotClient() {
               <li key={stage} className="flex items-center">
                 {index > 0 && (
                   <span
-                    className={`mx-1 hidden h-px w-4 sm:block ${
-                      busy ? "mc-flow-line bg-[#1b2530]" : "bg-[#2b3948]"
+                    className={`mx-1 hidden h-px w-5 shrink-0 sm:block ${
+                      active ? "mc-connector-live" : "bg-[#2b3948]"
                     }`}
                     aria-hidden
                   />
                 )}
                 <div
                   className={`flex items-center gap-2 border px-2.5 py-2 ${
-                    active
-                      ? "mc-run-stripes border-[#f5a524]/60 bg-[#f5a524]/[0.07]"
-                      : "border-[#1b2530] bg-[#10171e]"
+                    active ? "mc-stage-active" : "border-[#1b2530] bg-[#10171e]"
                   }`}
                 >
                   <span className={`mc-led ${active ? "mc-led-amber" : "mc-led-dim"}`} />
                   <span
                     className={`text-[10px] uppercase tracking-[0.14em] ${
-                      active ? "text-[#f5a524]" : "text-[#64748b]"
+                      active ? "text-[#f7c469]" : "text-[#64748b]"
                     }`}
                   >
                     {stage}
                   </span>
                   {badge !== null && badge > 0 && (
-                    <span className="border border-[#2b3948] px-1 text-[10px] text-[#8fa1b3]">{badge}</span>
+                    <span
+                      className={`px-1 text-[10px] ${
+                        active
+                          ? "border border-[#f5a524]/45 bg-[#f5a524]/10 text-[#f5a524]"
+                          : "border border-[#2b3948] text-[#8fa1b3]"
+                      }`}
+                    >
+                      {badge}
+                    </span>
                   )}
                 </div>
               </li>
@@ -641,19 +698,38 @@ export default function ScreenshotClient() {
                       e.preventDefault();
                       setFile(slot, e.dataTransfer.files?.[0] ?? null);
                     }}
-                    className={`mc-brackets flex h-40 cursor-pointer flex-col items-center justify-center gap-2 border border-dashed p-2 text-center transition-colors ${
+                    className={`mc-brackets flex h-52 cursor-pointer flex-col items-center justify-center p-3 text-center transition-colors ${
                       preview
-                        ? "border-[#2fd583]/50 bg-[#2fd583]/[0.04]"
-                        : "border-[#2b3948] bg-[#10171e] hover:border-[#f5a524]/40 hover:bg-[#f5a524]/[0.03]"
+                        ? "mc-viewport border border-[#2fd583]/40"
+                        : "border border-dashed border-[#2b3948] bg-[#10171e] hover:border-[#f5a524]/40 hover:bg-[#f5a524]/[0.03]"
                     }`}
                   >
                     {preview ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={preview}
-                        alt={`${meta.title} preview`}
-                        className="h-full w-full object-contain"
-                      />
+                      <>
+                        <div className="mc-viewport-bed flex min-h-0 flex-1 items-center justify-center">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={preview}
+                            alt={`${meta.title} preview`}
+                            className="max-h-full max-w-full border border-[#2b3948] bg-[#05070a] p-0.5 object-contain shadow-[0_0_28px_rgba(47,213,131,0.14)]"
+                          />
+                        </div>
+                        <div className="mt-2 flex w-full items-center justify-between gap-2 border-t border-[#1b2530] pt-2">
+                          <span
+                            className="truncate text-[10px] text-[#8fa1b3]"
+                            title={media[slot]?.name ?? ""}
+                          >
+                            {media[slot]?.name ?? "screenshot"}
+                          </span>
+                          <span className="shrink-0 text-[10px] tabular-nums text-[#2fd583]">
+                            {media[slot] && media[slot]!.width > 0
+                              ? `${media[slot]!.width}×${media[slot]!.height} · ${(media[slot]!.bytes / 1024).toFixed(0)} KB`
+                              : files[slot]
+                                ? `${(files[slot]!.size / 1024).toFixed(0)} KB`
+                                : ""}
+                          </span>
+                        </div>
+                      </>
                     ) : (
                       <>
                         <ImageIcon className="h-5 w-5 text-[#64748b]" />
@@ -683,10 +759,67 @@ export default function ScreenshotClient() {
             </div>
           )}
 
-          {queuedFlash && (
-            <div className="mt-4 border border-[#2fd583]/40 bg-[#2fd583]/10 px-3 py-2 text-[11px] text-[#7be3b2]">
-              » queued — zero AI spent at intake. vision read starts in the background; watch the
-              pipeline above.
+          {receipt && (
+            <div className="mc-receipt mt-4">
+              <div className="flex items-center justify-between gap-3 border-b border-dashed border-[#2fd583]/30 px-4 py-2">
+                <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-[#2fd583]">
+                  <span className="mc-led mc-led-green" />
+                  commit accepted · receipt
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setReceipt(null)}
+                  className="text-[#4b5a68] transition-colors hover:text-[#2fd583]"
+                  aria-label="Dismiss receipt"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <div className="grid gap-px bg-[#1b2530] sm:grid-cols-3">
+                <div className="bg-[#0c1116] px-4 py-2.5">
+                  <span className="mc-label">job ticket</span>
+                  <p className="mt-1 text-[12px] text-[#f5a524]">
+                    #{receipt.jobId.slice(0, 8)}
+                  </p>
+                </div>
+                <div className="bg-[#0c1116] px-4 py-2.5">
+                  <span className="mc-label">ai spent at intake</span>
+                  <p className="mt-1 text-[12px] text-[#2fd583]">0 tokens — nothing read yet</p>
+                </div>
+                <div className="bg-[#0c1116] px-4 py-2.5">
+                  <span className="mc-label">logged</span>
+                  <p className="mt-1 text-[12px] text-[#c8d3dd]">{receipt.at}</p>
+                </div>
+              </div>
+
+              <div className="px-4 py-3">
+                <span className="mc-label">carried into the machine</span>
+                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2">
+                  {["VISION READ", "DEDUPE CHECK", "CRAWL", "AUDIT ENGINE", "PROSPECT", "AI REPORT"].map(
+                    (step, index) => (
+                      <span key={step} className="flex items-center gap-2">
+                        {index > 0 && <span className="text-[#2b3948]" aria-hidden>▸</span>}
+                        <span
+                          className={`border px-2 py-1 text-[10px] uppercase tracking-[0.14em] ${
+                            index === 0
+                              ? "mc-stage-active border-[#f5a524] text-[#f7c469]"
+                              : "border-[#1b2530] bg-[#10171e] text-[#64748b]"
+                          }`}
+                        >
+                          {step}
+                        </span>
+                      </span>
+                    )
+                  )}
+                </div>
+
+                <p className="mt-3 text-[10px] text-[#4b5a68]">
+                  received: {receipt.media.join("   ·   ")}
+                  {receipt.hasFacebook ? "   ·   both bays" : "   ·   bay-01 only"}
+                  {" — the worker picks this up within a minute"}
+                </p>
+              </div>
             </div>
           )}
 

@@ -275,6 +275,41 @@
 .mc-brackets::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
 .mc-brackets::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
 
+/* A loaded bay is an inspection bed, not an empty black box: faint graph paper
+   so the letterboxing looks deliberate, a green wash from the top, and the
+   screenshot standing on its own dark card like a captured specimen. */
+.mc-viewport {
+  background-image:
+    repeating-linear-gradient(0deg, rgba(148, 163, 184, 0.045) 0 1px, transparent 1px 10px),
+    repeating-linear-gradient(90deg, rgba(148, 163, 184, 0.045) 0 1px, transparent 1px 10px),
+    radial-gradient(120% 90% at 50% 0%, rgba(47, 213, 131, 0.08), transparent 70%),
+    #0a0e13;
+}
+.mc-viewport-bed {
+  position: relative;
+  width: 100%;
+}
+.mc-viewport-bed img {
+  animation: mc-specimen-in 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.1) 1;
+}
+@keyframes mc-specimen-in {
+  from { opacity: 0; transform: scale(0.97); }
+}
+
+/* The queue receipt — the machine prints a ticket instead of flashing a line
+   of text, so the operator can see what the job actually carries. */
+.mc-receipt {
+  border: 1px solid rgba(47, 213, 131, 0.35);
+  background:
+    repeating-linear-gradient(0deg, rgba(47, 213, 131, 0.028) 0 1px, transparent 1px 22px),
+    #0b1210;
+  box-shadow: inset 0 0 40px rgba(47, 213, 131, 0.06);
+  animation: mc-receipt-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.1) 1;
+}
+@keyframes mc-receipt-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+
 /* Terminal rows */
 .mc-terminal { background: #080b0e; }
 .mc-terminal li { border-bottom: 1px solid rgba(27, 37, 48, 0.6); }
@@ -286,37 +321,51 @@
    through the active stage, sparks travelling along the connectors, pistons
    firing in the block, gears turning while work is in flight. =========== */
 
-@keyframes mc-stripes {
-  from { background-position: 0 0; }
-  to { background-position: 28px 0; }
+/* The active stage is marked with light, not hazard tape. A clean amber frame,
+   one slow breath of glow, and a single rail of light running along the bottom
+   edge — throughput made visible without shouting over the stage label. */
+@keyframes mc-stage-breathe {
+  0%, 100% { box-shadow: inset 0 0 16px rgba(245, 165, 36, 0.04); }
+  50% { box-shadow: inset 0 0 26px rgba(245, 165, 36, 0.13); }
 }
-.mc-run-stripes {
-  background-image: repeating-linear-gradient(
-    45deg,
-    rgba(245, 165, 36, 0.22) 0 6px,
-    transparent 6px 14px
-  );
-  animation: mc-stripes 0.9s linear infinite;
+@keyframes mc-stage-rail {
+  from { background-position: -70% 0; }
+  to { background-position: 170% 0; }
 }
-
-@keyframes mc-flow {
-  0% { left: -12%; opacity: 0; }
-  15% { opacity: 1; }
-  85% { opacity: 1; }
-  100% { left: 100%; opacity: 0; }
-}
-.mc-flow-line {
+.mc-stage-active {
   position: relative;
   overflow: hidden;
+  border-color: rgba(245, 165, 36, 0.42) !important;
+  background: linear-gradient(180deg, rgba(245, 165, 36, 0.09) 0%, rgba(245, 165, 36, 0.015) 100%);
+  animation: mc-stage-breathe 3.4s ease-in-out infinite;
 }
-.mc-flow-line::after {
+.mc-stage-active::after {
   content: "";
   position: absolute;
-  top: 0;
+  left: 0;
+  right: 0;
   bottom: 0;
-  width: 12px;
-  background: linear-gradient(90deg, transparent, var(--mc-amber), transparent);
-  animation: mc-flow 1.3s linear infinite;
+  height: 2px;
+  background-image: linear-gradient(90deg, transparent, rgba(245, 165, 36, 0.9), transparent);
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  animation: mc-stage-rail 2.1s linear infinite;
+}
+
+/* Connectors between stages: small dashes marching toward the next stage.
+   Slower and finer than the old spark, so the row reads as one calm
+   instrument instead of a fairground. */
+@keyframes mc-connector-flow {
+  from { background-position: 0 0; }
+  to { background-position: 11px 0; }
+}
+.mc-connector-live {
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(245, 165, 36, 0.8) 0 3px,
+    transparent 3px 11px
+  );
+  animation: mc-connector-flow 1.1s linear infinite;
 }
 
 @keyframes mc-piston {
