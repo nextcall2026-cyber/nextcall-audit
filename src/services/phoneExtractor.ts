@@ -43,7 +43,18 @@ export class PhoneExtractor {
       }
     });
 
-    const phoneRegex = /(\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g;
+    // Only human-visible text.
+    //
+    // $('body').text() also returns the contents of inline <script> JSON blobs
+    // and of <noscript> markup. That is how an image filename
+    // ("david-price-logo-e1647273094202.png") and a WordPress version hash
+    // became "phone numbers" and were handed to the audit as public phones.
+    $('script, style, noscript, svg, template').remove();
+
+    // The digit-run boundaries matter as much as the sanitising: without them
+    // the regex happily took 12 digits out of the middle of a 13-digit number.
+    const phoneRegex =
+      /(?<!\d)(?:\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)/g;
     const text = $('body').text() || '';
     const matches = text.match(phoneRegex) || [];
 

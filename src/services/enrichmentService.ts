@@ -52,6 +52,12 @@ export class EnrichmentOrchestrator {
       let pagesSuccessful = 0;
       let pagesFailed = 0;
       let jsRenderingLikely = false;
+      /** Title and meta description off the homepage — the AI report asks for
+       *  both, and they were never filled in, so it was told "Unknown" every
+       *  time. */
+      let siteTitle: string | undefined;
+      let siteDescription: string | undefined;
+      let resolvedUrl = targetUrl;
 
       // Add homepage to queue with highest priority
       queue.push({ url: targetUrl, score: 1000 });
@@ -76,6 +82,22 @@ export class EnrichmentOrchestrator {
         pagesSuccessful++;
         const html = fetchResult.html;
         const sourceUrl = item.url;
+        const isHomepage = visited.size === 1;
+
+        if (isHomepage) {
+          // Where the site actually lives (a bare domain often 301s to www).
+          resolvedUrl = fetchResult.finalUrl || item.url;
+
+          const $meta = cheerio.load(html);
+          siteTitle =
+            $meta("title").first().text().trim() ||
+            $meta('meta[property="og:title"]').attr("content")?.trim() ||
+            undefined;
+          siteDescription =
+            $meta('meta[name="description"]').attr("content")?.trim() ||
+            $meta('meta[property="og:description"]').attr("content")?.trim() ||
+            undefined;
+        }
 
         if (fetchResult.requiresJsRendering) {
           jsRenderingLikely = true;
@@ -99,7 +121,7 @@ export class EnrichmentOrchestrator {
         if (features.hasClickToCall) featureFlags.hasClickToCall = true;
 
         // Discover new links only from the Homepage (depth 1)
-        if (visited.size === 1) {
+        if (isHomepage) {
           const $ = cheerio.load(html);
           $('a[href]').each((_, element) => {
             const rawHref = $(element).attr('href') || '';
@@ -110,7 +132,17 @@ export class EnrichmentOrchestrator {
               try {
                 const targetDomain = new URL(targetUrl).hostname;
                 const linkDomain = new URL(cleanUrl).hostname;
-                if (targetDomain === linkDomain) {
+
+                // Compare hosts with "www." ignored.
+                //
+                // validateUrlForCrawling() strips www from the starting URL, but
+                // a site's own navigation links point at its canonical host —
+                // usually www. A strict string compare therefore threw away
+                // every internal link and crawled the homepage alone, so the
+                // audit was written from one page out of five.
+                const bareHost = (host: string) => host.replace(/^www\./i, "").toLowerCase();
+
+                if (bareHost(targetDomain) === bareHost(linkDomain)) {
                   const score = getUrlScore(cleanUrl);
                   if (score > 0) { // Only queue high-value pages
                     queue.push({ url: cleanUrl, score });
@@ -165,7 +197,9 @@ export class EnrichmentOrchestrator {
       };
 
       const websiteData: WebsiteData = {
-        url: targetUrl,
+        url: resolvedUrl,
+        title: siteTitle,
+        description: siteDescription,
         isReachable: pagesSuccessful > 0,
         requiresJsRendering: jsRenderingLikely,
       };

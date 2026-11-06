@@ -52,7 +52,16 @@ export async function fetchHtml(initialUrl: string): Promise<FetchResult> {
           return { success: false, error: `SSRF Protection: Blocked redirect to unsafe URL.` };
         }
 
-        currentUrl = validation.normalizedUrl;
+        // Follow the destination EXACTLY as the server sent it.
+        //
+        // validateUrlForCrawling() exists to answer "is this host safe?" and it
+        // normalises by stripping "www.". Using its normalisedUrl here turned
+        // every canonicalising site into an infinite loop: the bare domain
+        // 301s to www, the validator stripped www again, we re-fetched the bare
+        // domain, and the crawl died with "Exceeded maximum redirects". A large
+        // share of small-business sites are configured exactly that way, and a
+        // failed crawl makes the audit claim the website is unreachable.
+        currentUrl = new URL(nextUrl).toString();
         redirectCount++;
         continue; // Loop back and fetch the new URL
       }
@@ -86,6 +95,8 @@ export async function fetchHtml(initialUrl: string): Promise<FetchResult> {
       return { 
         success: true, 
         html, 
+        // response.url is empty for a manually-followed redirect chain, so the
+        // last URL we actually requested is the real address of this page.
         finalUrl: response.url || currentUrl,
         requiresJsRendering 
       };
