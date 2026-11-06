@@ -11,7 +11,6 @@ import {
     setCachedList,
     setLastActiveFilter,
 } from "./pipelineCache";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Trash2 } from "lucide-react";
 import { logger } from "@/lib/logger";
@@ -20,8 +19,52 @@ import Link from "next/link";
 
 import { getErrorMessage } from "@/lib/errors";
 import { useToast } from "@/components/ui/toast";
-const STATUS_FILTERS: PipelineFilter[] = [
-    "DUE", "ALL", "EMAILED", "NEW", "READY_TO_CONTACT", "CONTACTED", "FOLLOW_UP", "QUALIFIED", "UNQUALIFIED"
+
+/**
+ * The pipeline's boxes.
+ *
+ * These are the operator's questions, not the database's status values: what do
+ * I still owe today, who opened my email, who clicked. The technical
+ * pipelineStatus is printed on each card instead of taking a tab of its own —
+ * nine tabs of raw state names is what made this page unreadable.
+ */
+interface PipelineView {
+    id: PipelineFilter;
+    label: string;
+    hint: string;
+}
+
+const PIPELINE_VIEWS: PipelineView[] = [
+    {
+        id: "DUE",
+        label: "DUE NOW",
+        hint: "Audits that are ready but were never emailed, plus follow-ups due today or already overdue.",
+    },
+    {
+        id: "OPENED",
+        label: "OPENED",
+        hint: "They opened the email — recorded by the tracking pixel and the provider's open webhook.",
+    },
+    {
+        id: "CLICKED",
+        label: "CLICKED",
+        hint: "They clicked a link inside the email — recorded by the provider's click webhook.",
+    },
+    {
+        id: "AWAITING",
+        label: "AWAITING SEND",
+        hint: "The audit is ready and no email has gone out yet. Sending picks these up when auto-send is on.",
+    },
+    {
+        id: "EMAILED",
+        label: "EMAILED",
+        hint: "At least one email has been sent to them. Follow-up dates live here.",
+    },
+    {
+        id: "ALL",
+        label: "ALL",
+        hint: "Every prospect in the pipeline.",
+    },
 ];
 
 // Human label per outreach sequence state, shown on pipeline cards so the
@@ -58,6 +101,8 @@ export default function PipelineClient() {
     );
     const [isLoading, setIsLoading] = useState<boolean>(() => !hasCachedList(getLastActiveFilter()));
     const [activeFilter, setActiveFilter] = useState<PipelineFilter>(getLastActiveFilter());
+    const [counts, setCounts] = useState<Record<string, number>>({});
+    const [truncated, setTruncated] = useState<boolean>(false);
     const latestRequestId = useRef(0);
 
     useEffect(() => {
@@ -73,14 +118,16 @@ export default function PipelineClient() {
         const requestId = ++latestRequestId.current;
         const fetchProspects = async () => {
             try {
-                const query = activeFilter !== "ALL" && activeFilter !== "DUE" ? `?status=${activeFilter}` : "";
-                const response = await fetch(`/api/prospects${query}`);
+                const response = await fetch(`/api/prospects?view=${activeFilter}`);
                 if (!response.ok) throw new Error("Failed to fetch pipeline");
 
                 const data = await response.json();
                 if (requestId !== latestRequestId.current) return; // a newer filter already won
-                setProspects(data.prospects);
-                setCachedList(cacheKey, data.prospects);
+                const list = data.prospects ?? [];
+                setProspects(list);
+                if (data.counts) setCounts(data.counts as Record<string, number>);
+                setTruncated(Boolean(data.truncated));
+                setCachedList(cacheKey, list);
             } catch (err) {
                 logger.error("[PipelineClient] Fetch failed:", getErrorMessage(err));
                 if (!hadCacheOnScreen) {
@@ -142,34 +189,45 @@ export default function PipelineClient() {
         }
     };
 
-    const displayedProspects = activeFilter === "DUE"
-        ? prospects.filter(p => {
-            const status = getFollowUpStatus(p.nextFollowUpAt);
-            return (status === "OVERDUE" || status === "DUE_TODAY") &&
-                !["UNQUALIFIED", "CLOSED_LOST", "CONVERTED"].includes(p.pipelineStatus);
-        })
-        : activeFilter === "EMAILED"
-        ? prospects
-            .filter(p => p.lastContactedAt !== null || p.outreachState !== "UNCONTACTED")
-            .sort((a, b) =>
-                new Date(b.lastContactedAt ?? 0).getTime() - new Date(a.lastContactedAt ?? 0).getTime()
-            )
-        : prospects;
+    // Every box is filtered server-side now, so the list is exactly what the
+    // API returned for the active box — no second filtering pass that could
+    // disagree with the count shown on the tab.
+    const displayedProspects = prospects;
 
     return (
         <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap gap-2">
-                {STATUS_FILTERS.map(status => (
-                    <Button
-                        key={status}
-                        variant={activeFilter === status ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => applyFilter(status)}
-                        className={status === "DUE" && activeFilter !== "DUE" ? "border-red-500 text-red-600 hover:bg-red-50" : ""}
-                    >
-                        {status.replace(/_/g, " ")}
-                    </Button>
-                ))}
+            <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap gap-2">
+                    {PIPELINE_VIEWS.map((view) => {
+                        const isActive = activeFilter === view.id;
+                        const count = counts[view.id] ?? 0;
+                        return (
+                            <button
+                                key={view.id}
+                                type="button"
+                                onClick={() => applyFilter(view.id)}
+                                className={`flex items-center gap-2 border px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.14em] transition-colors ${
+                                    isActive
+                                        ? "border-[#f5a524] bg-[#f5a524]/10 text-[#f7c469]"
+                                        : "border-[#2b3948] bg-[#10171e] text-[#8fa1b3] hover:border-[#f5a524]/40 hover:text-[#c8d3dd]"
+                                }`}
+                            >
+                                {view.label}
+                                <span className={`tabular-nums ${isActive ? "text-[#f5a524]" : "text-[#4b5a68]"}`}>
+                                    {count}
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
+                <p className="text-[11px] text-[#4b5a68]">
+                    {PIPELINE_VIEWS.find((view) => view.id === activeFilter)?.hint ?? ""}
+                    {truncated && (
+                        <span className="text-[#f5a524]">
+                            {" "}showing the first {displayedProspects.length} of {counts[activeFilter] ?? 0} — narrow it with another box.
+                        </span>
+                    )}
+                </p>
             </div>
 
             <div className="flex flex-col gap-3">
@@ -179,10 +237,16 @@ export default function PipelineClient() {
                     <Card>
                         <CardContent className="p-8 text-center text-gray-500">
                             {activeFilter === "DUE"
-                                ? "No follow-ups due! You're all caught up."
+                                ? "Nothing is due right now — every audit has been emailed and no follow-up has come round."
+                                : activeFilter === "OPENED"
+                                ? "No opens recorded yet. Opens are logged by the 1x1 pixel in the email and by the provider's open webhook."
+                                : activeFilter === "CLICKED"
+                                ? "No clicks recorded yet. Turn on click tracking in the provider dashboard so its click webhook fires."
+                                : activeFilter === "AWAITING"
+                                ? "Every audit has already been emailed. Load new screenshots to fill this box."
                                 : activeFilter === "EMAILED"
-                                ? "No emails sent yet. Open a prospect in the pipeline and send the initial outreach email."
-                                : "No prospects found in this stage. Discover businesses and add them to your pipeline!"}
+                                ? "No emails sent yet. Open a prospect and send the initial outreach email."
+                                : "No prospects found. Discover businesses or load screenshots to fill the pipeline."}
                         </CardContent>
                     </Card>
                 )}

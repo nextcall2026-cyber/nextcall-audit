@@ -22,7 +22,19 @@ export interface EnrichedProspect extends Prospect {
   auditScore: number | null;
 }
 
-export type PipelineFilter = "DUE" | "EMAILED" | PipelineStatus | "ALL";
+/**
+ * The boxes the pipeline can show. DUE / AWAITING / EMAILED / OPENED / CLICKED
+ * are the operator's questions; the rest are raw pipeline statuses, still
+ * accepted so an old link keeps working.
+ */
+export type PipelineFilter =
+  | "DUE"
+  | "AWAITING"
+  | "EMAILED"
+  | "OPENED"
+  | "CLICKED"
+  | PipelineStatus
+  | "ALL";
 
 const cache = new Map<PipelineFilter, EnrichedProspect[]>();
 let lastActiveFilter: PipelineFilter = "ALL";

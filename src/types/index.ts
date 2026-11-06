@@ -432,7 +432,13 @@ export interface OutreachRecord {
   error: string | null;
   sentAt: string;
   deliveredAt: string | null; 
+  /** When the recipient first opened the email (tracking pixel or open webhook). */
   openedAt: string | null;
+  /** When the recipient first clicked a link in the email (click webhook). */
+  clickedAt?: string | null;
+  /** How many times the tracking pixel fired; a rough interest signal. */
+  openCount?: number;
+  clickCount?: number;
 }
 
 export interface FollowUpDraft {

@@ -115,6 +115,18 @@ async function handleEvent(event: MailtrapEvent): Promise<boolean> {
   const mapped = mapMailtrapEvent(type);
   if (mapped.outcome === null && !mapped.suppress) return false;
 
+  // Opens and clicks feed the pipeline's OPENED / CLICKED boxes. Mailtrap only
+  // sends these when tracking is switched on for the sending domain.
+  if (mapped.outcome === "OPENED" || mapped.outcome === "CLICKED") {
+    if (!messageId) return false;
+    const record = await outreachPersistenceService.findByMessageId(messageId);
+    if (!record) return false;
+
+    if (mapped.outcome === "OPENED") await outreachPersistenceService.markOpened(record.id);
+    else await outreachPersistenceService.markClicked(record.id);
+    return true;
+  }
+
   const reason = event.response ?? event.reason ?? event.bounce_category ?? null;
 
   let prospectId: string | null = null;

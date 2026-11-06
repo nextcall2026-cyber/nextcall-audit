@@ -89,6 +89,9 @@ async createPendingOutreach(
         sentAt: new Date().toISOString(),
         deliveredAt: null,
         openedAt: null,
+        clickedAt: null,
+        openCount: 0,
+        clickCount: 0,
       };
 
       await collection.insertOne(newRecord);
@@ -299,7 +302,7 @@ async markAsSent(
       const collection = await getOutreachCollection();
       const result = await collection.updateOne(
         { id, openedAt: null },
-        { $set: { openedAt: new Date().toISOString() } }
+        { $set: { openedAt: new Date().toISOString() }, $inc: { openCount: 1 } }
       );
       if (result.modifiedCount > 0) {
         logger.info(`[OutreachPersistenceService] Recorded open for outreach ${id}.`);
@@ -322,9 +325,50 @@ async markAsSent(
             dedupeKey: `first-open:${opened.prospectId}`,
           });
         }
+      } else {
+        // Already opened before: keep the counter honest without re-notifying.
+        await collection.updateOne({ id }, { $inc: { openCount: 1 } });
       }
     } catch (error) {
       logger.error(`[OutreachPersistenceService] Failed to record open for outreach ${id}:`, getErrorMessage(error));
+    }
+  }
+
+  /**
+   * Records a click on a link inside an outreach email (provider click webhook).
+   *
+   * The first click stamps clickedAt, which is what the pipeline's CLICKED box
+   * reads; later clicks only bump the counter. A click is the strongest interest
+   * signal the machine gets, so it notifies once per prospect.
+   */
+  async markClicked(id: string): Promise<void> {
+    try {
+      const collection = await getOutreachCollection();
+      const result = await collection.updateOne(
+        { id, clickedAt: null },
+        { $set: { clickedAt: new Date().toISOString() }, $inc: { clickCount: 1 } }
+      );
+
+      if (result.modifiedCount > 0) {
+        logger.info(`[OutreachPersistenceService] Recorded click for outreach ${id}.`);
+
+        const clicked = (await collection.findOne({ id })) as unknown as OutreachRecord | null;
+        if (clicked) {
+          await notificationService.notify({
+            type: "EMAIL_FIRST_OPEN",
+            title: `Link clicked: ${clicked.subject}`,
+            body: `To ${clicked.recipient} — they opened the email and followed a link.`,
+            href: `/dashboard/pipeline/${clicked.prospectId}`,
+            prospectId: clicked.prospectId,
+            businessId: clicked.businessId,
+            dedupeKey: `first-click:${clicked.prospectId}`,
+          });
+        }
+      } else {
+        await collection.updateOne({ id }, { $inc: { clickCount: 1 } });
+      }
+    } catch (error) {
+      logger.error(`[OutreachPersistenceService] Failed to record click for outreach ${id}:`, getErrorMessage(error));
     }
   }
 

@@ -57,6 +57,25 @@ export async function POST(request: NextRequest) {
     const event = JSON.parse(rawBody);
     logger.info(`[API /webhooks/resend] Received event: ${event.type}`);
 
+    // Opens and clicks feed the pipeline's OPENED / CLICKED boxes. Nothing is
+    // suppressed here - engagement is good news.
+    if (event.type === 'email.opened' || event.type === 'email.clicked') {
+      const engagementId = event.data?.email_id || event.data?.message_id;
+      if (engagementId) {
+        const record = await outreachPersistenceService.findByMessageId(engagementId);
+        if (record) {
+          if (event.type === 'email.opened') {
+            await outreachPersistenceService.markOpened(record.id);
+          } else {
+            await outreachPersistenceService.markClicked(record.id);
+          }
+        } else {
+          logger.warn(`[API /webhooks/resend] No outreach record for ${engagementId}`);
+        }
+      }
+      return NextResponse.json({ success: true });
+    }
+
     // We only care about delivery events
     if (event.type === 'email.delivered' || event.type === 'email.bounced' || event.type === 'email.complained') {
       const messageId = event.data?.email_id || event.data?.message_id;

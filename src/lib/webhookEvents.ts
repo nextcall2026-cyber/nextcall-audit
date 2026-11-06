@@ -12,8 +12,18 @@ import crypto from "crypto";
  * BOUNCED / COMPLAINED / unsubscribe event also suppresses the prospect.
  */
 
-/** Delivery outcomes that can be recorded on an outreach record. */
-export type WebhookDeliveryOutcome = "DELIVERED" | "BOUNCED" | "COMPLAINED";
+/**
+ * Outcomes a webhook can record on an outreach record.
+ *
+ * DELIVERED / BOUNCED / COMPLAINED describe what happened to the message;
+ * OPENED / CLICKED are engagement signals and never suppress anything.
+ */
+export type WebhookDeliveryOutcome =
+  | "DELIVERED"
+  | "BOUNCED"
+  | "COMPLAINED"
+  | "OPENED"
+  | "CLICKED";
 
 export interface MappedWebhookEvent {
   /** null = nothing to record on the outreach record (ignore the event). */
@@ -61,8 +71,13 @@ export function mapMailgunEvent(event: string, severity?: string): MappedWebhook
       return complained();
     case "unsubscribed":
       return unsubscribed();
+    case "opened":
+      // Engagement, not deliverability: record it, never suppress.
+      return { outcome: "OPENED", suppress: false, reason: null };
+    case "clicked":
+      return { outcome: "CLICKED", suppress: false, reason: null };
     default:
-      // opened / clicked / accepted / temporary_fail — nothing to record here.
+      // accepted / temporary_fail — nothing to record here.
       return IGNORED;
   }
 }
@@ -84,8 +99,13 @@ export function mapMailtrapEvent(event: string): MappedWebhookEvent {
       return complained();
     case "unsubscribe":
       return unsubscribed();
+    case "open":
+      // Engagement, not deliverability: record it, never suppress.
+      return { outcome: "OPENED", suppress: false, reason: null };
+    case "click":
+      return { outcome: "CLICKED", suppress: false, reason: null };
     default:
-      // soft bounce / suspension / open / click — nothing to record here.
+      // soft bounce / suspension — nothing to record here.
       return IGNORED;
   }
 }

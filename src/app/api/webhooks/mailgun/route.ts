@@ -28,7 +28,8 @@ import { prospectPersistenceService } from "@/services/prospectPersistenceServic
  *   failed (severity permanent)          → BOUNCED  + suppress the prospect
  *   complained                           → COMPLAINED + suppress the prospect
  *   unsubscribed                         → suppress the prospect
- *   opened / clicked / accepted / temporary fail → ignored
+ *   opened / clicked                     → OPENED / CLICKED on the outreach record
+ *   accepted / temporary fail            → ignored
  */
 
 interface MailgunFields {
@@ -71,6 +72,15 @@ export async function POST(request: NextRequest) {
     const mapped = mapMailgunEvent(type, fields.severity);
     if (mapped.outcome === null && !mapped.suppress) {
       return NextResponse.json({ success: true, processed: 0 });
+    }
+
+    // Opens and clicks are engagement, not deliverability: they land in the
+    // pipeline's OPENED / CLICKED boxes and never suppress anyone.
+    if (mapped.outcome === "OPENED" || mapped.outcome === "CLICKED") {
+      const handled = fields.messageId
+        ? await markEngagement(fields.messageId, mapped.outcome)
+        : false;
+      return NextResponse.json({ success: true, processed: handled ? 1 : 0 });
     }
 
     let prospectId: string | null = null;
@@ -173,4 +183,31 @@ async function suppressByMessageId(messageId: string): Promise<string | null> {
   }
 
   return null;
+}
+
+/**
+ * Stamps an open or a click on the outreach record behind a message id,
+ * tolerating the angle-bracket variants Mailgun returns.
+ */
+async function markEngagement(
+  messageId: string,
+  outcome: "OPENED" | "CLICKED"
+): Promise<boolean> {
+  const variants = new Set([
+    messageId,
+    messageId.replace(/^<|>$/g, ""),
+    `<${messageId.replace(/^<|>$/g, "")}>`,
+  ]);
+
+  for (const candidate of variants) {
+    if (!candidate) continue;
+    const record = await outreachPersistenceService.findByMessageId(candidate);
+    if (!record) continue;
+
+    if (outcome === "OPENED") await outreachPersistenceService.markOpened(record.id);
+    else await outreachPersistenceService.markClicked(record.id);
+    return true;
+  }
+
+  return false;
 }

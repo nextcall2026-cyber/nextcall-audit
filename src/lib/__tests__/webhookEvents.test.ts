@@ -50,8 +50,21 @@ describe("mapMailgunEvent", () => {
     });
   });
 
-  it("ignores engagement events", () => {
-    for (const event of ["opened", "clicked", "accepted", "temporary_fail", ""]) {
+  it("records opens and clicks without suppressing anyone", () => {
+    expect(mapMailgunEvent("opened")).toEqual({
+      outcome: "OPENED",
+      suppress: false,
+      reason: null,
+    });
+    expect(mapMailgunEvent("clicked")).toEqual({
+      outcome: "CLICKED",
+      suppress: false,
+      reason: null,
+    });
+  });
+
+  it("ignores the events that carry no state change", () => {
+    for (const event of ["accepted", "temporary_fail", ""]) {
       expect(mapMailgunEvent(event)).toEqual({ outcome: null, suppress: false, reason: null });
     }
   });
@@ -86,8 +99,21 @@ describe("mapMailtrapEvent", () => {
     });
   });
 
-  it("ignores soft bounces, suspensions and engagement events", () => {
-    for (const event of ["soft bounce", "suspension", "open", "click", ""]) {
+  it("records opens and clicks without suppressing anyone", () => {
+    expect(mapMailtrapEvent("open")).toEqual({
+      outcome: "OPENED",
+      suppress: false,
+      reason: null,
+    });
+    expect(mapMailtrapEvent("click")).toEqual({
+      outcome: "CLICKED",
+      suppress: false,
+      reason: null,
+    });
+  });
+
+  it("ignores soft bounces and suspensions", () => {
+    for (const event of ["soft bounce", "suspension", ""]) {
       expect(mapMailtrapEvent(event)).toEqual({ outcome: null, suppress: false, reason: null });
     }
   });
