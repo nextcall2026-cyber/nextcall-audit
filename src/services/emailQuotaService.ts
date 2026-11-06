@@ -11,6 +11,7 @@ import {
 import { EmailProviderName } from "@/types";
 import { QuotaGateway } from "@/services/emailProvider";
 import { outreachPersistenceService } from "@/services/outreachPersistenceService";
+import { providerExhaustionService } from "@/services/providerExhaustionService";
 
 interface UsageCache {
   day: string;
@@ -93,17 +94,27 @@ export class EmailQuotaService implements QuotaGateway {
 
   async getCapacities(): Promise<ProviderCapacity[]> {
     const limits = this.getLimits();
-    const usage = await this.getUsage();
+    const [usage, exhaustedToday] = await Promise.all([
+      this.getUsage(),
+      providerExhaustionService.getExhausted(),
+    ]);
 
     return EMAIL_PROVIDER_ORDER.map((name) => {
       const limit = limits[name];
       const used = usage[name];
+      const exhausted = Boolean(exhaustedToday[name]);
+
       return {
         name,
         configured: this.isConfigured(name),
         used,
         limit,
-        remaining: Math.max(0, limit - used),
+        // A provider that already refused today has nothing left, even when the
+        // stored count sits below the configured limit. Counting the arithmetic
+        // remaining here is what produced "17 emails left today" that could not
+        // be sent — every attempt was rejected by Mailtrap.
+        remaining: exhausted ? 0 : Math.max(0, limit - used),
+        exhausted,
       };
     });
   }
@@ -128,11 +139,17 @@ export class EmailQuotaService implements QuotaGateway {
     const usage = await this.getUsage();
     usage[name] = Math.max(usage[name], this.getLimits()[name]);
     logger.warn(`[EmailQuota] ${name} marked exhausted for today.`);
+
+    // Also write it down: the in-memory pin dies with the process, and the next
+    // cold start would otherwise re-read 133/150 and retry a provider that has
+    // already said no.
+    await providerExhaustionService.markExhausted(name);
   }
 
   /** Test/dev hook: forget the cached counts. */
   resetCache(): void {
     this.cache = null;
+    providerExhaustionService.resetCache();
   }
 }
 

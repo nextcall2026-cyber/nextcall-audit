@@ -34,6 +34,13 @@ export interface ProviderCapacity {
   used: number;
   limit: number;
   remaining: number;
+  /**
+   * True when the provider itself said "no allowance left" today, whatever the
+   * stored count says. A provider's real allowance can be lower than the
+   * configured limit (Mailtrap refused at 133 when env said 150), so this flag —
+   * not the arithmetic — decides whether the provider may be offered again.
+   */
+  exhausted?: boolean;
 }
 
 /** Human label used in logs, API payloads and the settings page. */
@@ -53,7 +60,14 @@ export function buildSendPlan(capacities: ProviderCapacity[]): EmailProviderName
 
   return EMAIL_PROVIDER_ORDER.filter((name) => {
     const capacity = byName.get(name);
-    return Boolean(capacity?.configured) && (capacity?.remaining ?? 0) > 0;
+    return (
+      Boolean(capacity?.configured) &&
+      // A provider that already refused today is skipped even when the stored
+      // count still looks low: its real allowance can be smaller than the number
+      // in env, and retrying it costs a PDF render and a FAILED record each time.
+      !capacity?.exhausted &&
+      (capacity?.remaining ?? 0) > 0
+    );
   });
 }
 
@@ -61,7 +75,7 @@ export function buildSendPlan(capacities: ProviderCapacity[]): EmailProviderName
 export function totalRemaining(capacities: ProviderCapacity[]): number {
   return capacities
     .filter((c) => c.configured)
-    .reduce((sum, c) => sum + Math.max(0, c.remaining), 0);
+    .reduce((sum, c) => sum + (c.exhausted ? 0 : Math.max(0, c.remaining)), 0);
 }
 
 /** "Mailgun 100/100, Mailtop 0/150, Resend 50/50" — used in the exhausted-everything error. */

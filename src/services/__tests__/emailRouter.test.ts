@@ -13,9 +13,17 @@ function capacity(
   name: EmailProviderName,
   used: number,
   limit: number,
-  configured = true
+  configured = true,
+  exhausted = false
 ): ProviderCapacity {
-  return { name, configured, used, limit, remaining: Math.max(0, limit - used) };
+  return {
+    name,
+    configured,
+    used,
+    limit,
+    remaining: exhausted ? 0 : Math.max(0, limit - used),
+    exhausted,
+  };
 }
 
 function fakeProvider(name: EmailProviderName, result: SendEmailOutput): IEmailProvider {
@@ -277,5 +285,44 @@ describe("EmailService routing", () => {
     expect(result.error).toContain("Mailgun 100/100");
     expect(result.error).toContain("Mailtop (Mailtrap) 150/150");
     expect(result.error).toContain("Resend 50/50");
+  });
+});
+
+/**
+ * The bug this guards: a provider's real allowance can be smaller than the
+ * number configured in env. Mailtrap refused further mail at 133 sends while
+ * EMAIL_DAILY_LIMIT_MAILTOP said 150, so the counter kept offering 17 sends that
+ * could never leave — each attempt costing a PDF render and a FAILED record.
+ * "Exhausted" is what the provider told us, so it outranks the arithmetic.
+ */
+describe("a provider that reported its own limit", () => {
+  it("is skipped even while its counter still has room", () => {
+    const plan = buildSendPlan([
+      capacity("mailgun", 100, 100),
+      capacity("mailtop", 133, 150, true, true),
+      capacity("resend", 20, 50),
+    ]);
+
+    expect(plan).toEqual(["resend"]);
+  });
+
+  it("contributes nothing to the emails left today", () => {
+    const remaining = totalRemaining([
+      capacity("mailgun", 100, 100),
+      capacity("mailtop", 133, 150, true, true),
+      capacity("resend", 50, 50),
+    ]);
+
+    // The old arithmetic said 17 here, and every one of them was refused.
+    expect(remaining).toBe(0);
+  });
+
+  it("still counts the provider's real sends in its used figure", () => {
+    const plan = buildSendPlan([
+      capacity("mailgun", 0, 100),
+      capacity("mailtop", 133, 150, true, true),
+    ]);
+
+    expect(plan).toEqual(["mailgun"]);
   });
 });

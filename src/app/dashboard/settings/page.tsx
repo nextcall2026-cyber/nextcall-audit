@@ -158,20 +158,30 @@ export default async function SettingsPage() {
                             </div>
 
                             {capacity.map((provider) => {
-                                const percent = provider.limit > 0
-                                    ? Math.min(100, Math.round((provider.used / provider.limit) * 100))
-                                    : 0;
+                                const exhausted = Boolean(provider.exhausted);
+                                const percent = exhausted
+                                    ? 100
+                                    : provider.limit > 0
+                                      ? Math.min(100, Math.round((provider.used / provider.limit) * 100))
+                                      : 0;
 
                                 return (
                                     <div key={provider.name} className="space-y-1">
                                         <div className="flex items-center justify-between text-xs">
                                             <span className="font-medium text-foreground">{EMAIL_PROVIDER_LABELS[provider.name]}</span>
-                                            <span className="text-muted-foreground">
-                                                {provider.configured ? `${provider.used} / ${provider.limit}` : "Not configured"}
+                                            <span className={exhausted ? "text-destructive" : "text-muted-foreground"}>
+                                                {!provider.configured
+                                                    ? "Not configured"
+                                                    : exhausted
+                                                      ? `${provider.used} / ${provider.limit} · limit reached`
+                                                      : `${provider.used} / ${provider.limit}`}
                                             </span>
                                         </div>
                                         <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                                            <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
+                                            <div
+                                                className={`h-full rounded-full ${exhausted ? "bg-destructive" : "bg-primary"}`}
+                                                style={{ width: `${percent}%` }}
+                                            />
                                         </div>
                                     </div>
                                 );
@@ -179,7 +189,11 @@ export default async function SettingsPage() {
 
                             <p className="text-xs text-muted-foreground">
                                 Mailgun sends first, Mailtop takes over when Mailgun&apos;s daily quota is spent,
-                                and Resend covers the rest. All reset at 00:00 UTC.
+                                and Resend covers the rest. A provider that reports its own limit is marked
+                                <span className="text-destructive"> limit reached </span>
+                                here and skipped for the rest of the day even if its counter looks lower —
+                                Mailtrap&apos;s real allowance can be smaller than the configured one.
+                                Mailgun and Resend reset at 00:00 UTC; Mailtrap resets on its own clock.
                             </p>
                         </CardContent>
                     </Card>
