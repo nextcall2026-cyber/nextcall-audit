@@ -8,11 +8,30 @@ import { extractSocialProfiles } from "@/services/socialExtractor";
 import { extractBookingData } from "@/services/bookingExtractor";
 import { extractWebsiteFeatures } from "@/services/featureExtractor";
 import { normalizeUrl } from "@/lib/urlNormalizer";
-import { getUrlScore, CRAWL_LIMITS } from "@/lib/crawlConfig";
+import { scoreCandidatePage, CRAWL_LIMITS } from "@/lib/crawlConfig";
 import { logger } from "@/lib/logger";
 import * as cheerio from "cheerio";
 
 import { getErrorMessage } from "@/lib/errors";
+
+/**
+ * The identity of a page, ignoring "www.".
+ *
+ * normalizeUrl() strips trailing slashes and tracking params but leaves the
+ * host alone, so a site that links to itself both as "https://example.com/x"
+ * and "https://www.example.com/x" queued the same page twice and spent two of
+ * its page budget on one fetch.
+ */
+function canonicalKey(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hostname = parsed.hostname.replace(/^www\./i, "").toLowerCase();
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 export class EnrichmentOrchestrator {
   async enrichBusiness(business: Business): Promise<EnrichmentData> {
     const enrichment: EnrichmentData = {
@@ -41,6 +60,8 @@ export class EnrichmentOrchestrator {
       // 2. Crawl State Setup
       const visited = new Set<string>();
       const queue: { url: string; score: number }[] = [];
+      /** Stops two links to the same page (www and non-www) filling the budget. */
+      const queuedKeys = new Set<string>();
 
       const allEmails = new Map<string, EmailData>();
       const allPhones = new Map<string, PhoneData>();
@@ -61,6 +82,7 @@ export class EnrichmentOrchestrator {
 
       // Add homepage to queue with highest priority
       queue.push({ url: targetUrl, score: 1000 });
+      queuedKeys.add(canonicalKey(targetUrl));
 
       // 3. Process Queue — homepage first (its links seed the queue), then the
       //    remaining pages in small parallel batches, so a 5-page site no
@@ -69,7 +91,7 @@ export class EnrichmentOrchestrator {
       const crawlDeadline = Date.now() + CRAWL_LIMITS.overallTimeoutMs;
 
       const processPage = async (item: { url: string; score: number }): Promise<void> => {
-        visited.add(item.url);
+        visited.add(canonicalKey(item.url));
         pagesAttempted++;
 
         // Fetch HTML
@@ -120,36 +142,44 @@ export class EnrichmentOrchestrator {
         if (features.hasLiveChat) featureFlags.hasLiveChat = true;
         if (features.hasClickToCall) featureFlags.hasClickToCall = true;
 
-        // Discover new links only from the Homepage (depth 1)
+        // Discover new links only from the Homepage (depth 1). The homepage's
+        // own footer is usually the whole site index, which is why this reads
+        // every link on it rather than only the main navigation.
         if (isHomepage) {
           const $ = cheerio.load(html);
           $('a[href]').each((_, element) => {
             const rawHref = $(element).attr('href') || '';
             const cleanUrl = normalizeUrl(rawHref, sourceUrl);
+            if (!cleanUrl) return;
 
-            if (cleanUrl && !visited.has(cleanUrl)) {
-              // Ensure it's the same domain
-              try {
-                const targetDomain = new URL(targetUrl).hostname;
-                const linkDomain = new URL(cleanUrl).hostname;
+            const key = canonicalKey(cleanUrl);
+            if (visited.has(key) || queuedKeys.has(key)) return;
 
-                // Compare hosts with "www." ignored.
-                //
-                // validateUrlForCrawling() strips www from the starting URL, but
-                // a site's own navigation links point at its canonical host —
-                // usually www. A strict string compare therefore threw away
-                // every internal link and crawled the homepage alone, so the
-                // audit was written from one page out of five.
-                const bareHost = (host: string) => host.replace(/^www\./i, "").toLowerCase();
+            // Ensure it's the same domain
+            try {
+              const targetDomain = new URL(targetUrl).hostname;
+              const linkDomain = new URL(cleanUrl).hostname;
 
-                if (bareHost(targetDomain) === bareHost(linkDomain)) {
-                  const score = getUrlScore(cleanUrl);
-                  if (score > 0) { // Only queue high-value pages
-                    queue.push({ url: cleanUrl, score });
-                  }
-                }
-              } catch {}
-            }
+              // Compare hosts with "www." ignored.
+              //
+              // validateUrlForCrawling() strips www from the starting URL, but
+              // a site's own navigation links point at its canonical host —
+              // usually www. A strict string compare therefore threw away
+              // every internal link and crawled the homepage alone.
+              const bareHost = (host: string) => host.replace(/^www\./i, "").toLowerCase();
+              if (bareHost(targetDomain) !== bareHost(linkDomain)) return;
+
+              // The link's own label counts too. Small businesses name their
+              // pages by what they do ("Raleigh Kitchen Remodel"), so the path
+              // alone often scores nothing and the page is lost.
+              const anchorText = $(element).text().replace(/\s+/g, " ").trim();
+              const score = scoreCandidatePage(cleanUrl, anchorText);
+
+              if (score > 0) {
+                queue.push({ url: cleanUrl, score });
+                queuedKeys.add(key);
+              }
+            } catch {}
           });
         }
       };
@@ -159,7 +189,7 @@ export class EnrichmentOrchestrator {
         queue.sort((a, b) => b.score - a.score);
         const currentItem = queue.shift();
 
-        if (!currentItem || visited.has(currentItem.url)) continue;
+        if (!currentItem || visited.has(canonicalKey(currentItem.url))) continue;
 
         // Stop when the crawl budget is spent — but never before the homepage.
         if (visited.size > 0 && Date.now() > crawlDeadline) break;
@@ -177,7 +207,7 @@ export class EnrichmentOrchestrator {
           queue.length > 0
         ) {
           const next = queue.shift();
-          if (!next || visited.has(next.url)) continue;
+          if (!next || visited.has(canonicalKey(next.url))) continue;
           batch.push(next);
         }
 
