@@ -389,3 +389,108 @@
 .mc-needle { transform-origin: 44px 48px; animation: mc-needle 0.9s cubic-bezier(0.2, 0.9, 0.3, 1.2) 1; }
 
 .mc-gauge-arc { transition: stroke-dasharray 0.6s ease; }
+
+/* ==================== LANDING: LIVE ENGINE BACKDROP ======================
+   A schematic engine drawn in SVG and driven entirely by CSS: four pistons on
+   their own phases, counterweighted crank throws, two meshing gears, a belt
+   and flowing coolant. Deliberately dim and slow — it should read as machinery
+   running behind the page, not as decoration competing with the text. ===== */
+
+@keyframes mc-eng-piston {
+  0%, 100% { transform: translateY(-15px); }
+  50% { transform: translateY(15px); }
+}
+.mc-eng-piston {
+  animation: mc-eng-piston 1.7s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes mc-eng-crank {
+  to { transform: rotate(360deg); }
+}
+.mc-eng-crank {
+  animation: mc-eng-crank 3.4s linear infinite;
+  /* Rotation centre is set inline in viewBox units; a bbox-based origin would
+     spin a crank throw around its own middle instead of around the shaft. */
+}
+
+@keyframes mc-eng-belt {
+  to { stroke-dashoffset: -132; }
+}
+.mc-eng-belt { animation: mc-eng-belt 2.6s linear infinite; }
+
+@keyframes mc-eng-pipe {
+  to { stroke-dashoffset: -220; }
+}
+.mc-eng-pipe { animation: mc-eng-pipe 3.2s linear infinite; }
+
+/* The spark at top dead centre — a single frame, easy to miss on purpose. */
+@keyframes mc-eng-flash {
+  0%, 90%, 100% { opacity: 0; }
+  93%, 96% { opacity: 1; }
+}
+.mc-eng-flash { animation: mc-eng-flash 1.7s steps(1, end) infinite; }
+
+/* Whole-assembly float, so the machine never looks pasted on. */
+@keyframes mc-eng-drift {
+  0%, 100% { transform: translateY(-7px); }
+  50% { transform: translateY(7px); }
+}
+.mc-eng-drift { animation: mc-eng-drift 11s ease-in-out infinite; }
+
+@keyframes mc-eng-needle {
+  0%, 100% { transform: rotate(-52deg); }
+  50% { transform: rotate(52deg); }
+}
+.mc-eng-needle {
+  animation: mc-eng-needle 5s ease-in-out infinite;
+  /* Pivot set inline at the dial centre, not at the line's own centre. */
+}
+
+/* Technical-drawing annotation type, used for the part callouts. */
+.mc-eng-note {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  fill: #4b5a68;
+}
+.mc-eng-note-key { fill: #8fa1b3; }
+
+/* Fluid and belt travel share one dash-flow timing. */
+@keyframes mc-eng-rail {
+  to { stroke-dashoffset: -180; }
+}
+.mc-eng-rail { animation: mc-eng-rail 4.4s linear infinite; }
+
+/* The hero's stage rail: hairlines with a pulse travelling along them. */
+@keyframes mc-eng-pulse {
+  0% { opacity: 0; transform: translateX(0); }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(var(--mc-run, 64px)); }
+}
+.mc-eng-pulse {
+  animation: mc-eng-pulse 2.6s linear infinite;
+}
+
+/* Soft edge fade only. The backdrop used to be masked so hard that the drawing
+   was reduced to a smudge behind the hero — the engine is the point, so it now
+   stays legible and the page positions it instead. */
+.mc-eng-mask {
+  -webkit-mask-image: radial-gradient(92% 86% at 50% 50%, #000 58%, transparent 100%);
+  mask-image: radial-gradient(92% 86% at 50% 50%, #000 58%, transparent 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-eng-piston,
+  .mc-eng-crank,
+  .mc-eng-belt,
+  .mc-eng-pipe,
+  .mc-eng-flash,
+  .mc-eng-drift,
+  .mc-eng-needle,
+  .mc-eng-rail,
+  .mc-eng-pulse {
+    animation: none;
+  }
+}
