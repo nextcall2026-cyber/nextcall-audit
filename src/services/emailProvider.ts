@@ -54,5 +54,5 @@ export interface QuotaGateway {
   getSendPlan(): Promise<EmailProviderName[]>;
   getCapacities(): Promise<ProviderCapacity[]>;
   record(name: EmailProviderName): Promise<void>;
-  markExhausted(name: EmailProviderName): Promise<void>;
+  markExhausted(name: EmailProviderName, reason?: string | null): Promise<void>;
 }

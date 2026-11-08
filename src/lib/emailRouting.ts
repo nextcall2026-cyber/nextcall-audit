@@ -41,6 +41,14 @@ export interface ProviderCapacity {
    * not the arithmetic — decides whether the provider may be offered again.
    */
   exhausted?: boolean;
+  /** When the provider first refused today (UTC ISO). */
+  exhaustedAt?: string | null;
+  /**
+   * What the provider actually said when it refused. Without this the panel can
+   * only print "limit reached" next to a counter that looks half empty, which
+   * reads as a bug rather than as information.
+   */
+  exhaustedReason?: string | null;
 }
 
 /** Human label used in logs, API payloads and the settings page. */

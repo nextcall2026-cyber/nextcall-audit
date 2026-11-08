@@ -101,7 +101,9 @@ export class EmailService {
       failures.push(result.error ?? `${label} failed`);
 
       if (lastKind === "quota") {
-        await this.quota.markExhausted(name);
+        // Keep the provider's own words with the flag — at 68/100, "limit
+        // reached" is not obviously a daily allowance problem.
+        await this.quota.markExhausted(name, result.error);
         logger.warn(`[EmailService] ${label} is out of allowance, trying the next provider.`);
         continue;
       }

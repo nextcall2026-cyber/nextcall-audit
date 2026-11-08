@@ -102,7 +102,8 @@ export class EmailQuotaService implements QuotaGateway {
     return EMAIL_PROVIDER_ORDER.map((name) => {
       const limit = limits[name];
       const used = usage[name];
-      const exhausted = Boolean(exhaustedToday[name]);
+      const entry = exhaustedToday[name];
+      const exhausted = Boolean(entry);
 
       return {
         name,
@@ -115,6 +116,8 @@ export class EmailQuotaService implements QuotaGateway {
         // be sent — every attempt was rejected by Mailtrap.
         remaining: exhausted ? 0 : Math.max(0, limit - used),
         exhausted,
+        exhaustedAt: entry?.at ?? null,
+        exhaustedReason: entry?.reason ?? null,
       };
     });
   }
@@ -135,15 +138,16 @@ export class EmailQuotaService implements QuotaGateway {
    * A provider answered "no allowance left" — pin it to its limit so this
    * process stops offering it until the day rolls over.
    */
-  async markExhausted(name: EmailProviderName): Promise<void> {
+  async markExhausted(name: EmailProviderName, reason?: string | null): Promise<void> {
     const usage = await this.getUsage();
     usage[name] = Math.max(usage[name], this.getLimits()[name]);
     logger.warn(`[EmailQuota] ${name} marked exhausted for today.`);
 
     // Also write it down: the in-memory pin dies with the process, and the next
     // cold start would otherwise re-read 133/150 and retry a provider that has
-    // already said no.
-    await providerExhaustionService.markExhausted(name);
+    // already said no. The reason is stored with it so the capacity panel can
+    // explain the refusal instead of just asserting it.
+    await providerExhaustionService.markExhausted(name, reason);
   }
 
   /** Test/dev hook: forget the cached counts. */

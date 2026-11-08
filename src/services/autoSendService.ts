@@ -13,6 +13,8 @@ import {
   nextUtcResetLabel,
   startOfUtcDayIso,
 } from "@/services/automationSettingsService";
+import { emailQuotaService } from "@/services/emailQuotaService";
+import { describeCapacity } from "@/lib/emailRouting";
 import { logger } from "@/lib/logger";
 
 /**
@@ -118,6 +120,24 @@ class AutoSendService {
         candidates: 0,
         sent: 0,
         skipped: `daily cap of ${settings.dailyCap} reached — sending resumes at ${nextUtcResetLabel(settings.timezone)} local (00:00 UTC); audits keep running`,
+      };
+    }
+
+    // If no provider can accept a single message today, stop before touching a
+    // prospect. The router would refuse every attempt anyway, and each one
+    // costs a PDF render, an AI call and a FAILED outreach record — 143 of them
+    // in a single day, which buries the failures that actually matter.
+    const sendPlan = await emailQuotaService.getSendPlan();
+    if (sendPlan.length === 0) {
+      const capacities = await emailQuotaService.getCapacities();
+      const summary = describeCapacity(capacities);
+      logger.warn(`[AutoSendService] Every provider is out for today (${summary}) — pass skipped.`);
+      return {
+        ran: true,
+        dryRun: settings.dryRun,
+        candidates: 0,
+        sent: 0,
+        skipped: `every provider is out for today (${summary}) — nothing attempted; each one resumes on its own reset`,
       };
     }
 

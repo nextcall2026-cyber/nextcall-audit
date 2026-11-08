@@ -183,6 +183,22 @@ export default async function SettingsPage() {
                                                 style={{ width: `${percent}%` }}
                                             />
                                         </div>
+                                        {exhausted && (
+                                            <p className="text-[11px] leading-snug text-muted-foreground">
+                                                <span className="text-destructive">refused</span>
+                                                {provider.exhaustedAt
+                                                    ? ` ${provider.exhaustedAt.slice(11, 16)} UTC`
+                                                    : ""}
+                                                {
+                                                    // The provider's own words. A refusal at 68/100 is
+                                                    // usually a monthly ceiling or a window that is not
+                                                    // aligned to UTC midnight, not the daily counter.
+                                                }
+                                                {provider.exhaustedReason
+                                                    ? ` — ${provider.exhaustedReason}`
+                                                    : " — no message was returned"}
+                                            </p>
+                                        )}
                                     </div>
                                 );
                             })}
