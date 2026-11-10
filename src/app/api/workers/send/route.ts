@@ -5,6 +5,7 @@ import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 import { autoSendService, AutoSendReport } from "@/services/autoSendService";
 import { automationRunLogService } from "@/services/automationRunLogService";
+import { engineStateService } from "@/services/engineStateService";
 
 /**
  * The send worker — exactly ONE email per invocation.
@@ -67,6 +68,20 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     logger.warn(`[Worker /send] Rejected: ${auth.reason}`);
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // The engine gate: a scheduled caller only sends while the operator's engine
+  // is ON and freshly heartbeated. Manual ?wait=1 tests bypass the gate — an
+  // operator pressing a button is a deliberate action.
+  if (auth.via === "cron-secret") {
+    const engine = await engineStateService.isAutomationLive();
+    if (!engine.live) {
+      logger.info(`[Worker /send] Engine off (${engine.reason}) — pass skipped.`);
+      return NextResponse.json(
+        { accepted: false, engine: "off", reason: engine.reason },
+        { status: 200 }
+      );
+    }
   }
 
   const wantsToWait = new URL(request.url).searchParams.get("wait") === "1";

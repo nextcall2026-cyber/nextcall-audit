@@ -10,7 +10,7 @@ import { getErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { formatRelativeTime, iconFor } from "@/lib/notificationTypes";
 
-const POLL_INTERVAL_MS = 45_000;
+const POLL_INTERVAL_MS = 120_000;
 const PREVIEW_LIMIT = 8;
 
 /**
@@ -47,7 +47,12 @@ export function NotificationBell() {
 
         void run();
 
-        const timer = setInterval(() => { void run(); }, POLL_INTERVAL_MS);
+        const timer = setInterval(() => {
+            // Hidden tab — nobody is watching, and every poll is a billed
+            // serverless wake-up.
+            if (document.visibilityState !== "visible") return;
+            void run();
+        }, POLL_INTERVAL_MS);
         const onFocus = () => { void run(); };
         window.addEventListener("focus", onFocus);
 

@@ -16,6 +16,7 @@ import { saveBusinessFromScreenshots } from "@/services/businessIngestService";
 import { getScreenshotUploadsCollection } from "@/lib/db";
 import { AuditJob, ScreenshotUpload } from "@/types";
 import { notificationService } from "@/services/notificationService";
+import { engineStateService } from "@/services/engineStateService";
 
 /**
  * The audit worker.
@@ -208,6 +209,20 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     logger.warn(`[Worker /audit] Rejected: ${auth.reason}`);
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // The engine gate: a scheduled caller only runs a pass while the operator's
+  // engine is ON and freshly heartbeated. Manual ?wait=1 tests authenticate
+  // with the dashboard cookie and deliberately bypass this gate.
+  if (auth.via === "cron-secret") {
+    const engine = await engineStateService.isAutomationLive();
+    if (!engine.live) {
+      logger.info(`[Worker /audit] Engine off (${engine.reason}) — pass skipped.`);
+      return NextResponse.json(
+        { accepted: false, engine: "off", reason: engine.reason },
+        { status: 200 }
+      );
+    }
   }
 
   const workerId = `audit-${Date.now()}`;

@@ -7,6 +7,7 @@ import { LogoutButton } from "@/components/dashboard/LogoutButton";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { ToastProvider } from "@/components/ui/toast";
 import { AutomationHeartbeat } from "@/components/dashboard/AutomationHeartbeat";
+import { EngineSwitch } from "@/components/dashboard/EngineSwitch";
 import { cn } from "@/lib/utils";
 import { LayoutDashboard, Compass, Kanban, Settings, Camera, Menu, PanelLeft, Bell } from "lucide-react";
 
@@ -158,6 +159,7 @@ export default function DashboardLayout({
                         <h1 className="truncate text-base font-semibold text-foreground">{pageTitle}</h1>
                     </div>
                     <div className="flex items-center gap-1">
+                        <EngineSwitch />
                         <NotificationBell />
                         <LogoutButton />
                     </div>

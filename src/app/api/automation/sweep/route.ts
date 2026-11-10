@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runAutomationSweep, parseSweepParts, SweepParts } from "@/services/automationSweepService";
+import { engineStateService } from "@/services/engineStateService";
 import { authorizeSweep } from "@/lib/sweepAuth";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
@@ -37,6 +38,17 @@ async function handleSweep(request: NextRequest) {
   if (!auth.ok) {
     logger.warn(`[API /automation/sweep] Rejected: ${auth.reason}`);
     return NextResponse.json({ error: "Unauthorized", reason: auth.reason }, { status: 401 });
+  }
+
+  // The engine gate: scheduled sweeps (cron-job.org, Vercel Cron) run only
+  // while the engine is ON. The dashboard "Run now" button is a deliberate
+  // operator action and deliberately bypasses this gate.
+  if (auth.via === "cron-secret") {
+    const engine = await engineStateService.isAutomationLive();
+    if (!engine.live) {
+      logger.info(`[API /automation/sweep] Engine off (${engine.reason}) — sweep skipped.`);
+      return NextResponse.json({ skipped: true, engine: "off", reason: engine.reason });
+    }
   }
 
   try {

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { runAutomationSweep } from "@/services/automationSweepService";
+import { engineStateService } from "@/services/engineStateService";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -40,6 +41,15 @@ export function startAutomationScheduler(): void {
 
   const runPass = async (label: string) => {
     try {
+      // The engine gate: a cold serverless instance must not start a full
+      // sweep just because it booted. Only a freshly-heartbeated operator
+      // session (engine ON) lets the in-process passes through.
+      const engine = await engineStateService.isAutomationLive();
+      if (!engine.live) {
+        logger.debug(`[AutomationScheduler] ${label} skipped — engine off (${engine.reason}).`);
+        return;
+      }
+
       const result = await runAutomationSweep();
       const autoSend = result.autoSend;
       logger.info(

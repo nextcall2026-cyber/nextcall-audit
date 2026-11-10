@@ -7,6 +7,7 @@ import {
   PASS_INTERVAL_MS,
 } from "@/services/automationRunLogService";
 import { authorizeSweep } from "@/lib/sweepAuth";
+import { engineStateService } from "@/services/engineStateService";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -36,6 +37,17 @@ async function handleTick(request: NextRequest) {
   }
 
   try {
+    // The engine gate: nothing auto-sends while the engine is OFF — not the
+    // external cron, not even the dashboard heartbeat. Explicit operator
+    // actions (uploads, "Run now") do not come through here.
+    const engine = await engineStateService.isAutomationLive();
+    if (!engine.live) {
+      return NextResponse.json({
+        ran: false,
+        reason: `engine off (${engine.reason})`,
+      });
+    }
+
     const settings = await automationSettingsService.getSettings();
 
     if (!settings.autoSendEnabled) {

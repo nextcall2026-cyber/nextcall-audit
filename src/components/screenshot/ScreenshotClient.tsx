@@ -232,8 +232,16 @@ export default function ScreenshotClient() {
     }, 0);
     // The queue poll is the console's heartbeat; the settings read is slow and
     // rarely changes, so it rides a longer interval to spare the free-tier DB.
-    const queueTimer = setInterval(() => void loadQueue(), 8_000);
-    const sendTimer = setInterval(() => void loadSendState(), 15_000);
+    // Both polls pause while the tab is hidden — a hidden tab is not working,
+    // and every poll is a billed serverless wake-up.
+    const queueTimer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void loadQueue();
+    }, 20_000);
+    const sendTimer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void loadSendState();
+    }, 30_000);
     return () => {
       clearTimeout(initial);
       clearInterval(queueTimer);

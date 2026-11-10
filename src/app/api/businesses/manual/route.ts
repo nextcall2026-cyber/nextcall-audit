@@ -112,6 +112,15 @@ export async function POST(request: NextRequest) {
       `[API /businesses/manual] Queued screenshots (${uploads.length} image(s)) as job ${job.id} — no AI at queue time.`
     );
 
+    // Kick the audit worker straight away: even with the engine ON the external
+    // cron may be a lazy 1-5 minute cadence, and a freshly queued job should
+    // not wait for it. Fire-and-forget — when the engine is off, the worker's
+    // own gate answers and nothing runs until the operator switches on again.
+    void fetch(`${new URL(request.url).origin}/api/workers/audit`, {
+      method: "POST",
+      headers: { "x-cron-secret": process.env.CRON_SECRET ?? "" },
+    }).catch(() => undefined);
+
     return NextResponse.json({
       queued: true,
       jobId: job.id,
