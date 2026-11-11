@@ -9,8 +9,6 @@ import { cn } from "@/lib/utils";
 const STATUS_POLL_MS = 60_000;
 /** How often a live engine sends a keep-alive while the operator works. */
 const HEARTBEAT_EVERY_MS = 60_000;
-/** The keeper only counts the tab as "at work" when interaction happened inside this window. */
-const ACTIVITY_WINDOW_MS = 10 * 60 * 1000;
 
 interface EngineStatus {
   on: boolean;
@@ -25,18 +23,18 @@ interface EngineStatus {
  * The ENGINE switch for the dashboard header.
  *
  * One button: press it when you start working, press it again when you stop.
- * While ON, this component keeps the engine alive with heartbeats — but only
- * while the tab is visible AND the operator actually interacts (clicks, keys,
- * scroll). Close the window, hide the tab, or walk away for 30 minutes and the
- * server stops seeing heartbeats — every scheduled worker then sees the engine
- * as OFF all by itself, with nothing to clean up.
+ * While ON, the open tab keeps the engine alive with a heartbeat every minute
+ * — clicks or scrolling are NOT required (on Render the server-side keep-alive
+ * holds the instance awake too). Close the app and the server still honours
+ * the full TTL window (90 min on Render) before auto-off, so stepping away or
+ * restarting mid-work never lands you on a cold instance.
  */
 export function EngineSwitch() {
     const [status, setStatus] = useState<EngineStatus | null>(null);
+    const [ttlMinutes, setTtlMinutes] = useState(90);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const onRef = useRef(false);
-    const lastActivityRef = useRef(Date.now());
 
     useEffect(() => {
         onRef.current = Boolean(status?.on);
@@ -46,8 +44,9 @@ export function EngineSwitch() {
         try {
             const res = await fetch("/api/engine", { cache: "no-store" });
             if (!res.ok) throw new Error(`Request failed (${res.status})`);
-            const data = (await res.json()) as { engine: EngineStatus };
+            const data = (await res.json()) as { ttlMs: number; engine: EngineStatus };
             setStatus(data.engine);
+            setTtlMinutes(Math.max(1, Math.round(data.ttlMs / 60_000)));
             setError(null);
         } catch (err) {
             // The header keeps the last known state; the next poll retries.
@@ -61,21 +60,14 @@ export function EngineSwitch() {
         return () => window.clearInterval(poll);
     }, [refresh]);
 
-    // The activity keeper: real interaction sends heartbeats; a hidden tab or
-    // an untouched window does not. The server expires the engine after 30
-    // minutes without a heartbeat — window closed, laptop asleep, power cut,
-    // everything ends in the same safe place.
+    // The heartbeat keeper: while the engine is ON the open tab sends a
+    // heartbeat every minute — clicks or scrolling are NOT required. Closing
+    // the app stops the heartbeats; the server then honours its full TTL
+    // window (90 min on Render) before auto-off, exactly as the operator
+    // asked: work pauses never drop the instance into a spin-down.
     useEffect(() => {
-        const markActivity = () => { lastActivityRef.current = Date.now(); };
-        const events = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
-        events.forEach((event) =>
-            window.addEventListener(event, markActivity, { passive: true, capture: true })
-        );
-
         const beat = async () => {
             if (!onRef.current) return;
-            if (document.visibilityState !== "visible") return;
-            if (Date.now() - lastActivityRef.current > ACTIVITY_WINDOW_MS) return;
             try {
                 const res = await fetch("/api/engine", {
                     method: "POST",
@@ -83,8 +75,9 @@ export function EngineSwitch() {
                     body: JSON.stringify({ action: "heartbeat" }),
                 });
                 if (res.ok) {
-                    const data = (await res.json()) as { engine: EngineStatus };
+                    const data = (await res.json()) as { ttlMs: number; engine: EngineStatus };
                     setStatus(data.engine);
+                    setTtlMinutes(Math.max(1, Math.round(data.ttlMs / 60_000)));
                 }
             } catch (err) {
                 logger.debug("[EngineSwitch] heartbeat failed:", getErrorMessage(err));
@@ -92,12 +85,7 @@ export function EngineSwitch() {
         };
 
         const timer = window.setInterval(() => { void beat(); }, HEARTBEAT_EVERY_MS);
-        return () => {
-            events.forEach((event) =>
-                window.removeEventListener(event, markActivity, { capture: true })
-            );
-            window.clearInterval(timer);
-        };
+        return () => window.clearInterval(timer);
     }, []);
 
     const setEngine = async (action: "on" | "off") => {
@@ -110,9 +98,9 @@ export function EngineSwitch() {
                 body: JSON.stringify({ action }),
             });
             if (!res.ok) throw new Error(`Request failed (${res.status})`);
-            const data = (await res.json()) as { engine: EngineStatus };
+            const data = (await res.json()) as { ttlMs: number; engine: EngineStatus };
             setStatus(data.engine);
-            lastActivityRef.current = Date.now();
+            setTtlMinutes(Math.max(1, Math.round(data.ttlMs / 60_000)));
         } catch (err) {
             setError(getErrorMessage(err) ?? "Engine switch failed");
         } finally {
@@ -130,7 +118,7 @@ export function EngineSwitch() {
                 ? "Workers are running. Click to turn the engine OFF — scheduled workers stop, manual actions keep working."
                 : status.on
                     ? "Engine is ON but no activity reached the server — it will switch itself OFF. Click to keep working."
-                    : "Turn the engine ON — audit/auto-send/follow-up workers run while you work, and auto-off after 30 minutes without activity.";
+                    : `Turn the engine ON — audit/auto-send/follow-up workers run while you work, and auto-off ${ttlMinutes} minutes after the app closes.`;
 
     return (
         <button

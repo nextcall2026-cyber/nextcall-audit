@@ -31,8 +31,16 @@ import { getErrorMessage } from "@/lib/errors";
 
 const ENGINE_DOC_ID = "engine-state";
 
-/** How long the engine stays live without a dashboard heartbeat. */
-export const ENGINE_LIVE_TTL_MS = 30 * 60 * 1000;
+/**
+ * How long the engine stays live without a dashboard heartbeat. Configurable
+ * per deployment via ENGINE_TTL_MINUTES: a Vercel Hobby install keeps the
+ * 30-minute default to cap CPU, while a Render free instance sets 90 so the
+ * operator gets a long grace window before the instance is allowed to sleep.
+ */
+export const ENGINE_LIVE_TTL_MS =
+  Math.min(24 * 60, Math.max(5, Number(process.env.ENGINE_TTL_MINUTES) || 30)) *
+  60 *
+  1000;
 
 /** The reason stamped when the TTL expires without a heartbeat. */
 export const ENGINE_AUTO_OFF_REASON = "auto-off — 30 minutes without activity";
