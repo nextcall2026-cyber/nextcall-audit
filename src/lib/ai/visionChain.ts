@@ -6,13 +6,15 @@ import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors";
 
 /**
- * The vision chain: reads ONE screenshot with the strongest available image
- * model, falling back until one answers.
+ * The vision chain: reads screenshots with the strongest available image
+ * model. Both configured providers are WORKERS, not a queue: every call starts
+ * at the next provider in rotation (round-robin), so two screenshots submitted
+ * together are read in parallel by two different models instead of both
+ * hammering NVIDIA first. Failures still fall back through the remaining
+ * providers in order, and the FreeLLMApi router stays the last resort.
  *
- *   1. NVIDIA NIM — nvidia/nemotron-3.5-super-vl (proven 100% correct on real
- *      Google/Facebook listing screenshots; free credits)
- *   2. Grok slot — reserved for an xAI vision key; inactive until the env is
- *      fully set, then it becomes the second fallback automatically
+ *   1. NVIDIA NIM — nvidia/nemotron-3.5-super-vl
+ *   2. Groq slot — Groq's vision model (qwen3.8-27b), a full worker too
  *   3. FreeLLMApi router — the global gateway (auto:main) as the last resort
  *
  * Env vars are read at CALL time (so serverless env changes need no rebuild)
@@ -47,7 +49,21 @@ function configuredProviders(): VisionProvider[] {
   ].filter((provider): provider is VisionProvider => provider !== null);
 }
 
-/** Removes the markdown fences some models wrap their JSON in. */
+/** Round-robin cursor: every call starts at the next provider. */
+let rotationCursor = 0;
+
+/**
+ * The configured providers in ROTATION order: call N starts at provider
+ * N mod length. Two parallel calls therefore land on two different models,
+ * which is what makes the two screenshot reads genuinely simultaneous.
+ */
+function rotatedProviders(): VisionProvider[] {
+  const providers = configuredProviders();
+  if (providers.length <= 1) return providers;
+  const start = rotationCursor % providers.length;
+  rotationCursor += 1;
+  return [...providers.slice(start), ...providers.slice(0, start)];
+}
 function stripFences(text: string): string {
   const trimmed = (text ?? "").trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(trimmed);
@@ -123,7 +139,7 @@ async function callOpenAICompatibleVision(provider: VisionProvider, req: VisionC
 export async function readWithVisionChain(req: VisionChainRequest): Promise<VisionChainResult> {
   const failures: string[] = [];
 
-  for (const provider of configuredProviders()) {
+  for (const provider of rotatedProviders()) {
     const started = Date.now();
     try {
       const text = await callOpenAICompatibleVision(provider, req);
