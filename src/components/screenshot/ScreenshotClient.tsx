@@ -113,7 +113,7 @@ const STATUS_TOKENS: Record<JobRow["status"], { token: string; className: string
 
 const ENGINE_CELLS = [
   { id: "nvidia", label: "NVIDIA NEMOTRON-VL", role: "vision read" },
-  { id: "grok", label: "GROK // XAI", role: "vision fallback · reserve" },
+  { id: "grok", label: "GROQ // QWEN-VL", role: "vision fallback · reserve" },
   { id: "router", label: "ROUTER CHAIN", role: "reports · last resort" },
 ];
 
