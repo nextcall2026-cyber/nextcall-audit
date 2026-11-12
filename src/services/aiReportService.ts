@@ -228,16 +228,27 @@ NEXTCALL OPPORTUNITIES MAPPED BY ENGINE:
       return validationResult.data;
     };
 
-    try {
-      const report = await attempt();
-      logger.info(`[AIReportService] Successfully generated advanced report for ${business.name}.`);
-      return report;
-    } catch (error) {
-      logger.error(
-        `[AIReportService] Failed to generate the AI audit report: ${getErrorMessage(error)}`
-      );
-      throw new Error(`Failed to generate AI audit report: ${getErrorMessage(error)}`);
+    // The router's auto profile serves whichever free model is fastest, and
+    // some of them wrap or mangle the JSON. One clean re-roll usually lands
+    // on a model that parses — two failures mean the task itself is the
+    // problem, and the error propagates to the job's own retry queue.
+    let lastReportError: unknown;
+    for (let reportAttempt = 1; reportAttempt <= 2; reportAttempt++) {
+      try {
+        const report = await attempt();
+        logger.info(`[AIReportService] Successfully generated advanced report for ${business.name}.`);
+        return report;
+      } catch (error) {
+        lastReportError = error;
+        logger.warn(
+          `[AIReportService] Report attempt ${reportAttempt}/2 failed: ${getErrorMessage(error)}`
+        );
+      }
     }
+    logger.error(
+      `[AIReportService] Failed to generate the AI audit report: ${getErrorMessage(lastReportError)}`
+    );
+    throw new Error(`Failed to generate AI audit report: ${getErrorMessage(lastReportError)}`);
   }
 }
 

@@ -272,7 +272,7 @@ SEQUENCE STRATEGY:
 Write the Stage ${currentStage} follow-up email draft now.
 `;
 
-    try {
+    const generateOnce = async () => {
       const llm = await generateLLMResponse({
         system: systemPrompt,
         user: userPrompt,
@@ -312,22 +312,40 @@ Write the Stage ${currentStage} follow-up email draft now.
         `[AIFollowupService] Successfully generated Stage ${currentStage} draft. Angle: ${validationResult.data.angle}`
       );
 
-      return {
-        subject: validationResult.data.subject,
-        body: validationResult.data.body,
-        stage: currentStage,
-        ctaType: validationResult.data.ctaType as CTAType,
-        angle: validationResult.data.angle,
-      };
-    } catch (error) {
-      logger.error(
-        `[AIFollowupService] Failed to generate draft: ${getErrorMessage(error)}`
-      );
+      return validationResult.data;
+    };
 
-      throw new Error(
-        "Failed to generate AI follow-up draft."
-      );
+    // The router's auto profile serves whichever free model is fastest, and
+    // some of them emit broken or off-schema JSON. One clean re-roll usually
+    // lands on a model that parses — two failures mean the task itself is
+    // the problem, and the error propagates.
+    let lastDraftError: unknown;
+    for (let draftAttempt = 1; draftAttempt <= 2; draftAttempt++) {
+      try {
+        const data = await generateOnce();
+        logger.info(
+          `[AIFollowupService] Successfully generated Stage ${currentStage} draft. Angle: ${data.angle}`
+        );
+        return {
+          subject: data.subject,
+          body: data.body,
+          stage: currentStage,
+          ctaType: data.ctaType as CTAType,
+          angle: data.angle,
+        };
+      } catch (error) {
+        lastDraftError = error;
+        logger.warn(
+          `[AIFollowupService] Draft attempt ${draftAttempt}/2 failed: ${getErrorMessage(error)}`
+        );
+      }
     }
+
+    logger.error(
+      `[AIFollowupService] Failed to generate draft: ${getErrorMessage(lastDraftError)}`
+    );
+
+    throw new Error("Failed to generate AI follow-up draft.");
   }
 }
 
